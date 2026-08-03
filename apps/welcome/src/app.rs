@@ -1,6 +1,6 @@
 //! Application state and the onboarding flow for DraftOS Hello.
 
-use cosmic::iced::{Alignment, Length};
+use cosmic::iced::{Alignment, Length, Padding};
 use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::{executor, Core};
@@ -69,20 +69,42 @@ impl cosmic::Application for Welcome {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let content = match Page::ALL[self.page] {
+        let page = Page::ALL[self.page];
+        let content = match page {
             Page::Welcome => pages::welcome(),
             Page::Highlights => pages::highlights(),
             Page::Personalize => pages::personalize(),
             Page::Finish => pages::finish(),
         };
 
-        // Constrain content to a comfortable reading width, centered in the window.
-        let body = widget::container(widget::container(content).width(Length::Fixed(560.0)))
+        // Constrain content to a comfortable reading width, horizontally centered.
+        let framed = widget::container(widget::container(content).width(Length::Fixed(560.0)))
+            .center_x(Length::Fill);
+
+        // Equal flexible spacers put hero content in the exact center of the area
+        // between the header bar and the footer; content pages sit at the top.
+        let content_area = if page.is_centered() {
+            widget::column::with_capacity(3)
+                .push(widget::Space::new().height(Length::Fill))
+                .push(framed)
+                .push(widget::Space::new().height(Length::Fill))
+        } else {
+            widget::column::with_capacity(2)
+                .push(framed)
+                .push(widget::Space::new().height(Length::Fill))
+        };
+
+        let body = widget::container(content_area)
             .width(Length::Fill)
             .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .padding(32);
+            // Vertically symmetric so the flexible spacers center hero content
+            // exactly between the header bar and the footer.
+            .padding(Padding {
+                top: 24.0,
+                right: 32.0,
+                bottom: 24.0,
+                left: 32.0,
+            });
 
         widget::column::with_capacity(2)
             .push(body)

@@ -22,6 +22,12 @@ pub enum Page {
 impl Page {
     /// All pages in display order.
     pub const ALL: [Page; 4] = [Page::Welcome, Page::Highlights, Page::Personalize, Page::Finish];
+
+    /// Hero pages center their content in the whole window; content pages (lists)
+    /// top-align so they read from the top down.
+    pub fn is_centered(self) -> bool {
+        matches!(self, Page::Welcome | Page::Finish)
+    }
 }
 
 /// A single highlighted feature (icon + title + one-line description).
