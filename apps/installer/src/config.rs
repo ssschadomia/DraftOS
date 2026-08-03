@@ -24,6 +24,12 @@ pub struct InstallConfig {
     /// Index into [`KEYBOARDS`].
     pub keyboard: Option<usize>,
     pub install_type: Option<InstallType>,
+    // Account (filled on the Account step).
+    pub full_name: String,
+    pub username: String,
+    pub hostname: String,
+    /// Kept in memory only for the length of the install; never persisted here.
+    pub password: String,
 }
 
 /// (display name, locale) offered on the Language step.
