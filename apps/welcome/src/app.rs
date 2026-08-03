@@ -98,28 +98,35 @@ impl Welcome {
         let is_first = self.page == 0;
         let is_last = self.page == last;
 
-        let back = {
-            let b = widget::button::standard("Back");
-            if is_first {
-                b
-            } else {
-                b.on_press(Message::Back)
-            }
+        // Left slot: Back — hidden entirely on the first page (macOS-style). A
+        // fixed-width slot on each side keeps the step dots centered.
+        let left: Element<'_, Message> = if is_first {
+            widget::Space::new().into()
+        } else {
+            widget::button::standard("Back").on_press(Message::Back).into()
         };
+        let left = widget::container(left).width(Length::Fixed(120.0));
 
         let next = if is_last {
             widget::button::suggested("Finish").on_press(Message::Close)
         } else {
             widget::button::suggested("Continue").on_press(Message::Next)
         };
+        // Right slot: next button pushed flush-right within the same fixed width.
+        let right = widget::container(
+            widget::row::with_capacity(2)
+                .push(widget::Space::new().width(Length::Fill))
+                .push(next),
+        )
+        .width(Length::Fixed(120.0));
 
         let footer = widget::row::with_capacity(5)
             .align_y(Alignment::Center)
-            .push(back)
+            .push(left)
             .push(widget::Space::new().width(Length::Fill))
             .push(self.dots())
             .push(widget::Space::new().width(Length::Fill))
-            .push(next);
+            .push(right);
 
         widget::container(footer)
             .padding(24)

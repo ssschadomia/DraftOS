@@ -31,9 +31,11 @@ struct Feature {
     detail: &'static str,
 }
 
+// Icon names are chosen from the COSMIC icon theme (what DraftOS ships), so they
+// resolve in the running desktop rather than falling back to a generic glyph.
 const FEATURES: &[Feature] = &[
     Feature {
-        icon: "preferences-desktop-wallpaper-symbolic",
+        icon: "video-display-symbolic",
         title: "A desktop with depth",
         detail: "COSMIC with real glass and a layout that stays out of your way.",
     },
@@ -43,7 +45,7 @@ const FEATURES: &[Feature] = &[
         detail: "A store, control center and companion tools designed to feel like one system.",
     },
     Feature {
-        icon: "power-profile-performance-symbolic",
+        icon: "utilities-system-monitor-symbolic",
         title: "Tuned for speed",
         detail: "A performance-first Arch base with the CachyOS kernel and repositories.",
     },
@@ -56,7 +58,8 @@ const FEATURES: &[Feature] = &[
 
 /// Hero greeting.
 pub fn welcome<'a>() -> Element<'a, Message> {
-    let logo = widget::icon::from_name("start-here-symbolic").size(112).icon();
+    // Temporary brand placeholder until the real DraftOS mark lands in `brand/`.
+    let logo = widget::icon::from_name("insert-star-symbolic").size(112).icon();
 
     widget::column::with_capacity(4)
         .spacing(20)
@@ -133,7 +136,7 @@ pub fn finish<'a>() -> Element<'a, Message> {
     widget::column::with_capacity(3)
         .spacing(20)
         .align_x(Alignment::Center)
-        .push(widget::icon::from_name("emblem-ok-symbolic").size(96).icon())
+        .push(widget::icon::from_name("emblem-default-symbolic").size(96).icon())
         .push(widget::text::title1("You're all set"))
         .push(
             widget::text::body("Enjoy DraftOS. You can reopen this anytime from the app menu.")
