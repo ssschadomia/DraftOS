@@ -1,0 +1,20 @@
+# Rust
+/target/
+**/target/
+*.rs.bk
+
+# Build artifacts / images
+*.tar.zst
+*.iso
+*.img
+/build/out/
+/build/work/
+
+# Editor / OS cruft
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local staging (overlays assembled at build time)
+/editions/**/staging/
