@@ -8,7 +8,7 @@
 [workspace]
 resolver = "2"
 members = [
-    # "crates/draftos-common",
+    "crates/draftos-common",
     # "crates/draftos-link",
     # "cli/draftos",
     # "cli/draftbox",

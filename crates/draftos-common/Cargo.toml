@@ -1,0 +1,10 @@
+[package]
+name = "draftos-common"
+description = "Shared library for DraftOS tools: edition detection, brand constants, common paths."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
