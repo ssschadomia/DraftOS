@@ -7,10 +7,26 @@
 /// How the target disk should be provisioned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallType {
-    /// Erase a disk and install DraftOS on it.
+    /// Erase a whole disk and install DraftOS on it.
     Clean,
+    /// Install into free space next to an existing operating system.
+    Alongside,
+    /// Replace an existing DraftOS installation, keeping the disk layout.
+    Reinstall,
     /// Hand-assign existing partitions (advanced).
-    Custom,
+    Manual,
+}
+
+impl InstallType {
+    /// Short label for summaries.
+    pub fn label(self) -> &'static str {
+        match self {
+            InstallType::Clean => "Clean install",
+            InstallType::Alongside => "Install alongside",
+            InstallType::Reinstall => "Reinstall",
+            InstallType::Manual => "Manual partitioning",
+        }
+    }
 }
 
 /// Everything the wizard collects, consumed later by the install engine.
@@ -38,6 +54,11 @@ pub struct InstallConfig {
     pub hostname: String,
     /// Kept in memory only for the length of the install; never persisted here.
     pub password: String,
+    /// When true, root gets its own password ([`Self::root_password`]); when
+    /// false (the default), root shares the user's password.
+    pub root_separate: bool,
+    /// Root password, used only when [`Self::root_separate`] is true.
+    pub root_password: String,
 }
 
 /// (display name, locale) offered on the Language step.

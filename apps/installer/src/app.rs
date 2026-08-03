@@ -33,6 +33,9 @@ pub enum Message {
     SetHostname(String),
     SetPassword(String),
     SetPasswordConfirm(String),
+    ToggleRootSame(bool),
+    SetRootPassword(String),
+    SetRootConfirm(String),
 }
 
 /// The DraftOS installer.
@@ -56,6 +59,8 @@ pub struct Installer {
     luks_confirm: String,
     /// Password re-entry, kept in the UI only to check it matches.
     password_confirm: String,
+    /// Root password re-entry, UI-only, used when root has a separate password.
+    root_confirm: String,
     /// Install progress, 0.0..=1.0. Simulated until the engine reports real work.
     install_progress: f32,
 }
@@ -101,6 +106,7 @@ impl cosmic::Application for Installer {
             selected_disk: None,
             luks_confirm: String::new(),
             password_confirm: String::new(),
+            root_confirm: String::new(),
             install_progress: 0.0,
         };
         (installer, cosmic::app::Task::none())
@@ -146,6 +152,10 @@ impl cosmic::Application for Installer {
             Message::SetHostname(v) => self.config.hostname = v,
             Message::SetPassword(v) => self.config.password = v,
             Message::SetPasswordConfirm(v) => self.password_confirm = v,
+            // The toggler reads "Use the same password for root", so checked = shared.
+            Message::ToggleRootSame(same) => self.config.root_separate = !same,
+            Message::SetRootPassword(v) => self.config.root_password = v,
+            Message::SetRootConfirm(v) => self.root_confirm = v,
             Message::Close => {
                 if let Some(id) = self.core.main_window_id() {
                     return cosmic::iced::window::close(id);
@@ -226,11 +236,15 @@ impl Installer {
     }
 
     /// The account step is satisfiable when a username and a matching, non-empty
-    /// password are present.
+    /// password are present — and, if root has its own password, that it matches too.
     fn account_ok(&self) -> bool {
-        !self.config.username.trim().is_empty()
+        let user_ok = !self.config.username.trim().is_empty()
             && !self.config.password.is_empty()
-            && self.config.password == self.password_confirm
+            && self.config.password == self.password_confirm;
+        let root_ok = !self.config.root_separate
+            || (!self.config.root_password.is_empty()
+                && self.config.root_password == self.root_confirm);
+        user_ok && root_ok
     }
 
     /// Titled form layout: heading + subtitle above the step's content.
@@ -363,17 +377,27 @@ impl Installer {
             .class(cosmic::theme::Container::Card)
         };
 
-        widget::column::with_capacity(2)
+        widget::column::with_capacity(4)
             .spacing(12)
             .push(option(
                 "Clean install",
-                "Erase a disk and install DraftOS on it. Recommended.",
+                "Erase a whole disk and install DraftOS on it. Recommended.",
                 InstallType::Clean,
             ))
             .push(option(
-                "Custom (advanced)",
-                "Assign existing partitions yourself.",
-                InstallType::Custom,
+                "Install alongside",
+                "Keep your existing operating system and install DraftOS beside it.",
+                InstallType::Alongside,
+            ))
+            .push(option(
+                "Reinstall",
+                "Replace an existing DraftOS installation, keeping the disk layout.",
+                InstallType::Reinstall,
+            ))
+            .push(option(
+                "Manual partitioning",
+                "Assign existing partitions yourself (advanced).",
+                InstallType::Manual,
             ))
             .into()
     }
@@ -532,6 +556,28 @@ impl Installer {
             col = col.push(widget::text::caption("Passwords do not match."));
         }
 
+        // Administrator (root) password: share the user's by default.
+        col = col.push(widget::settings::item(
+            "Use the same password for the administrator (root)",
+            widget::toggler(!self.config.root_separate).on_toggle(Message::ToggleRootSame),
+        ));
+        if self.config.root_separate {
+            let secret = |label: &'static str, value: String, on_input: fn(String) -> Message| {
+                widget::settings::item(
+                    label,
+                    widget::secure_input(String::new(), value, None, true)
+                        .on_input(on_input)
+                        .width(Length::Fixed(300.0)),
+                )
+            };
+            col = col
+                .push(secret("Root password", self.config.root_password.clone(), Message::SetRootPassword))
+                .push(secret("Confirm root password", self.root_confirm.clone(), Message::SetRootConfirm));
+            if !self.root_confirm.is_empty() && self.config.root_password != self.root_confirm {
+                col = col.push(widget::text::caption("Root passwords do not match."));
+            }
+        }
+
         widget::container(col)
             .padding(16)
             .width(Length::Fill)
@@ -543,10 +589,11 @@ impl Installer {
     fn summary_view(&self) -> Element<'_, Message> {
         let lang = self.config.language.map_or("—", |i| LANGUAGES[i].0);
         let kbd = self.config.keyboard.map_or("—", |i| KEYBOARDS[i].0);
-        let install = match self.config.install_type {
-            Some(InstallType::Clean) => "Clean install",
-            Some(InstallType::Custom) => "Custom (advanced)",
-            None => "—",
+        let install = self.config.install_type.map_or("—", InstallType::label);
+        let admin = if self.config.root_separate {
+            "Separate password"
+        } else {
+            "Same as user"
         };
         let user = if self.config.username.trim().is_empty() {
             "—"
@@ -576,7 +623,8 @@ impl Installer {
             .push(widget::settings::item("Disk", widget::text::body(disk.to_string())))
             .push(row("Encryption", encryption))
             .push(widget::settings::item("Username", widget::text::body(user.to_string())))
-            .push(widget::settings::item("Computer name", widget::text::body(host.to_string())));
+            .push(widget::settings::item("Computer name", widget::text::body(host.to_string())))
+            .push(row("Administrator", admin));
 
         widget::container(rows)
             .padding(16)
