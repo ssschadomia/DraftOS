@@ -7,6 +7,7 @@
 
 mod app;
 mod config;
+mod locale_names;
 mod steps;
 mod system;
 

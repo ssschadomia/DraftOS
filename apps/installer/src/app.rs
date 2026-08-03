@@ -7,7 +7,8 @@ use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::{executor, Core};
 
-use crate::config::{InstallConfig, InstallType, KEYBOARDS, LANGUAGES};
+use crate::config::{InstallConfig, InstallType, KEYBOARDS};
+use crate::locale_names;
 use crate::steps::Step;
 use crate::system::{self, DiskInfo};
 
@@ -19,7 +20,8 @@ pub enum Message {
     Close,
     /// Timer tick that drives the install progress animation.
     Tick,
-    SelectLanguage(usize),
+    SelectLocale(usize),
+    SetLocaleSearch(String),
     SelectKeyboard(usize),
     SelectTimezone(usize),
     SetTimezoneSearch(String),
@@ -45,6 +47,12 @@ pub struct Installer {
     step: usize,
     /// Choices collected so far.
     config: InstallConfig,
+    /// Locales known to the system, offered on the Language step.
+    locales: Vec<String>,
+    /// Index into [`Installer::locales`] of the chosen locale.
+    selected_locale: Option<usize>,
+    /// Current filter text on the Language step.
+    locale_search: String,
     /// Time zones known to the system, offered on the Timezone step.
     timezones: Vec<String>,
     /// Index into [`Installer::timezones`] of the chosen zone.
@@ -86,9 +94,18 @@ impl cosmic::Application for Installer {
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|&i| i < Step::ALL.len())
             .unwrap_or(0);
+        let mut config = InstallConfig::default();
+
+        // Detect locales and preselect the system's current one.
+        let locales = system::detect_locales();
+        let selected_locale = system::current_locale()
+            .and_then(|l| locales.iter().position(|x| *x == l));
+        if let Some(i) = selected_locale {
+            config.locale = Some(locales[i].clone());
+        }
+
         // Detect time zones and preselect the system's current one.
         let timezones = system::detect_timezones();
-        let mut config = InstallConfig::default();
         let selected_tz = system::current_timezone()
             .and_then(|tz| timezones.iter().position(|z| *z == tz));
         if let Some(i) = selected_tz {
@@ -99,6 +116,9 @@ impl cosmic::Application for Installer {
             core,
             step,
             config,
+            locales,
+            selected_locale,
+            locale_search: String::new(),
             timezones,
             selected_tz,
             tz_search: String::new(),
@@ -132,7 +152,11 @@ impl cosmic::Application for Installer {
                     }
                 }
             }
-            Message::SelectLanguage(i) => self.config.language = Some(i),
+            Message::SelectLocale(i) => {
+                self.selected_locale = Some(i);
+                self.config.locale = self.locales.get(i).cloned();
+            }
+            Message::SetLocaleSearch(v) => self.locale_search = v,
             Message::SelectKeyboard(i) => self.config.keyboard = Some(i),
             Message::SelectTimezone(i) => {
                 self.selected_tz = Some(i);
@@ -220,7 +244,7 @@ impl Installer {
     /// Whether the current step's requirements are met (gates the Continue button).
     fn can_advance(&self) -> bool {
         match Step::ALL[self.step] {
-            Step::Language => self.config.language.is_some(),
+            Step::Language => self.config.locale.is_some(),
             Step::Keyboard => self.config.keyboard.is_some(),
             Step::Timezone => self.config.timezone.is_some(),
             Step::InstallType => self.config.install_type.is_some(),
@@ -255,7 +279,7 @@ impl Installer {
             .push(widget::text::body(step.subtitle()));
 
         let content = match step {
-            Step::Language => self.radio_list(LANGUAGES, self.config.language, Message::SelectLanguage),
+            Step::Language => self.language_view(),
             Step::Keyboard => self.radio_list(KEYBOARDS, self.config.keyboard, Message::SelectKeyboard),
             Step::Timezone => self.timezone_view(),
             Step::InstallType => self.install_type_view(),
@@ -402,18 +426,28 @@ impl Installer {
             .into()
     }
 
-    /// Time-zone picker: a search field over a scrollable list from the system.
-    fn timezone_view(&self) -> Element<'_, Message> {
-        let search = widget::search_input("Search time zones", self.tz_search.as_str())
-            .on_input(Message::SetTimezoneSearch);
+    /// A search field over a scrollable, single-select list of strings. `display`
+    /// maps each raw item to its shown label; the search matches either.
+    fn searchable_list<'a>(
+        &'a self,
+        items: &'a [String],
+        selected: Option<usize>,
+        search: &'a str,
+        spec: ListSpec,
+    ) -> Element<'a, Message> {
+        let search_box = widget::search_input(spec.placeholder, search).on_input(spec.on_search);
 
-        let query = self.tz_search.trim().to_lowercase();
+        let query = search.trim().to_lowercase();
         const CAP: usize = 200;
         let mut col = widget::column::with_capacity(64).spacing(2);
         let mut shown = 0usize;
         let mut more = false;
-        for (i, tz) in self.timezones.iter().enumerate() {
-            if !query.is_empty() && !tz.to_lowercase().contains(&query) {
+        for (i, item) in items.iter().enumerate() {
+            let label = (spec.display)(item);
+            if !query.is_empty()
+                && !label.to_lowercase().contains(&query)
+                && !item.to_lowercase().contains(&query)
+            {
                 continue;
             }
             if shown >= CAP {
@@ -421,13 +455,13 @@ impl Installer {
                 break;
             }
             col = col.push(
-                widget::radio(widget::text::body(tz.as_str()), i, self.selected_tz, Message::SelectTimezone)
+                widget::radio(widget::text::body(label), i, selected, spec.on_select)
                     .width(Length::Fill),
             );
             shown += 1;
         }
-        if self.timezones.is_empty() {
-            col = col.push(widget::text::caption("No time zones were detected."));
+        if items.is_empty() {
+            col = col.push(widget::text::caption("Nothing detected on this system."));
         } else if more {
             col = col.push(widget::text::caption("Refine your search to see more."));
         }
@@ -442,9 +476,39 @@ impl Installer {
 
         widget::column::with_capacity(2)
             .spacing(8)
-            .push(search)
+            .push(search_box)
             .push(list)
             .into()
+    }
+
+    /// Language picker: every system locale, shown as "Language (Country)".
+    fn language_view(&self) -> Element<'_, Message> {
+        self.searchable_list(
+            &self.locales,
+            self.selected_locale,
+            &self.locale_search,
+            ListSpec {
+                placeholder: "Search languages",
+                display: locale_names::friendly,
+                on_select: Message::SelectLocale,
+                on_search: Message::SetLocaleSearch,
+            },
+        )
+    }
+
+    /// Time-zone picker: every system zone.
+    fn timezone_view(&self) -> Element<'_, Message> {
+        self.searchable_list(
+            &self.timezones,
+            self.selected_tz,
+            &self.tz_search,
+            ListSpec {
+                placeholder: "Search time zones",
+                display: |tz| tz.to_string(),
+                on_select: Message::SelectTimezone,
+                on_search: Message::SetTimezoneSearch,
+            },
+        )
     }
 
     /// Target-disk picker, populated from `lsblk`.
@@ -587,7 +651,11 @@ impl Installer {
 
     /// Read-only review of the collected configuration.
     fn summary_view(&self) -> Element<'_, Message> {
-        let lang = self.config.language.map_or("—", |i| LANGUAGES[i].0);
+        let lang = self
+            .config
+            .locale
+            .as_deref()
+            .map_or_else(|| "—".to_string(), locale_names::friendly);
         let kbd = self.config.keyboard.map_or("—", |i| KEYBOARDS[i].0);
         let install = self.config.install_type.map_or("—", InstallType::label);
         let admin = if self.config.root_separate {
@@ -616,7 +684,7 @@ impl Installer {
 
         let rows = widget::column::with_capacity(8)
             .spacing(8)
-            .push(row("Language", lang))
+            .push(widget::settings::item("Language", widget::text::body(lang)))
             .push(row("Keyboard", kbd))
             .push(widget::settings::item("Time zone", widget::text::body(tz.to_string())))
             .push(row("Installation", install))
@@ -675,6 +743,15 @@ impl Installer {
 
         widget::container(footer).padding(24).width(Length::Fill).into()
     }
+}
+
+/// Parameters describing a [`Installer::searchable_list`]: how to label items,
+/// and which messages selection and search produce.
+struct ListSpec {
+    placeholder: &'static str,
+    display: fn(&str) -> String,
+    on_select: fn(usize) -> Message,
+    on_search: fn(String) -> Message,
 }
 
 /// A neutral placeholder for steps whose screens are not built yet.

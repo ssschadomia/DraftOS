@@ -51,6 +51,29 @@ pub fn detect_disks() -> Vec<DiskInfo> {
         .collect()
 }
 
+/// All UTF-8 locales the system knows, via `localectl list-locales` (excluding
+/// the `C`/`POSIX` pseudo-locales). Empty if the command is unavailable.
+pub fn detect_locales() -> Vec<String> {
+    Command::new("localectl")
+        .arg("list-locales")
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.contains("UTF-8") && !l.starts_with("C.") && !l.starts_with("POSIX"))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The system's current locale, from `$LANG` (e.g. `en_US.UTF-8`).
+pub fn current_locale() -> Option<String> {
+    std::env::var("LANG").ok().filter(|l| l.contains("UTF-8"))
+}
+
 /// All IANA time zones known to the system, via `timedatectl list-timezones`.
 /// Empty if the command is unavailable.
 pub fn detect_timezones() -> Vec<String> {

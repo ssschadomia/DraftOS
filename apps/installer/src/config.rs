@@ -35,8 +35,8 @@ impl InstallType {
 /// will extend this once their screens are built.
 #[derive(Debug, Default, Clone)]
 pub struct InstallConfig {
-    /// Index into [`LANGUAGES`].
-    pub language: Option<usize>,
+    /// Chosen locale (e.g. `en_US.UTF-8`), set on the Language step.
+    pub locale: Option<String>,
     /// Index into [`KEYBOARDS`].
     pub keyboard: Option<usize>,
     /// IANA time zone (e.g. `Europe/Moscow`), set on the Timezone step.
@@ -60,18 +60,6 @@ pub struct InstallConfig {
     /// Root password, used only when [`Self::root_separate`] is true.
     pub root_password: String,
 }
-
-/// (display name, locale) offered on the Language step.
-pub const LANGUAGES: &[(&str, &str)] = &[
-    ("English", "en_US.UTF-8"),
-    ("Русский", "ru_RU.UTF-8"),
-    ("Deutsch", "de_DE.UTF-8"),
-    ("Español", "es_ES.UTF-8"),
-    ("Français", "fr_FR.UTF-8"),
-    ("Italiano", "it_IT.UTF-8"),
-    ("Português", "pt_BR.UTF-8"),
-    ("日本語", "ja_JP.UTF-8"),
-];
 
 /// (display name, XKB layout) offered on the Keyboard step.
 pub const KEYBOARDS: &[(&str, &str)] = &[
