@@ -1,6 +1,8 @@
 //! The install wizard: state, flow control, and per-step views.
 
-use cosmic::iced::{Alignment, Length, Padding};
+use std::time::Duration;
+
+use cosmic::iced::{Alignment, Length, Padding, Subscription};
 use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::{executor, Core};
@@ -15,6 +17,8 @@ pub enum Message {
     Next,
     Back,
     Close,
+    /// Timer tick that drives the install progress animation.
+    Tick,
     SelectLanguage(usize),
     SelectKeyboard(usize),
     SelectInstallType(InstallType),
@@ -44,6 +48,8 @@ pub struct Installer {
     luks_confirm: String,
     /// Password re-entry, kept in the UI only to check it matches.
     password_confirm: String,
+    /// Install progress, 0.0..=1.0. Simulated until the engine reports real work.
+    install_progress: f32,
 }
 
 impl cosmic::Application for Installer {
@@ -75,6 +81,7 @@ impl cosmic::Application for Installer {
             selected_disk: None,
             luks_confirm: String::new(),
             password_confirm: String::new(),
+            install_progress: 0.0,
         };
         (installer, cosmic::app::Task::none())
     }
@@ -85,9 +92,20 @@ impl cosmic::Application for Installer {
             Message::Next => {
                 if self.can_advance() {
                     self.step = (self.step + 1).min(last);
+                    if Step::ALL[self.step] == Step::Install {
+                        self.install_progress = 0.0;
+                    }
                 }
             }
             Message::Back => self.step = self.step.saturating_sub(1),
+            Message::Tick => {
+                if Step::ALL[self.step] == Step::Install {
+                    self.install_progress = (self.install_progress + 0.012).min(1.0);
+                    if self.install_progress >= 1.0 {
+                        self.step = (self.step + 1).min(last);
+                    }
+                }
+            }
             Message::SelectLanguage(i) => self.config.language = Some(i),
             Message::SelectKeyboard(i) => self.config.keyboard = Some(i),
             Message::SelectInstallType(t) => self.config.install_type = Some(t),
@@ -115,43 +133,51 @@ impl cosmic::Application for Installer {
     fn view(&self) -> Element<'_, Message> {
         let step = Step::ALL[self.step];
 
-        let header = widget::column::with_capacity(2)
-            .spacing(4)
-            .push(widget::text::title2(step.title()))
-            .push(widget::text::body(step.subtitle()));
-
-        let content = match step {
-            Step::Language => self.radio_list(LANGUAGES, self.config.language, Message::SelectLanguage),
-            Step::Keyboard => self.radio_list(KEYBOARDS, self.config.keyboard, Message::SelectKeyboard),
-            Step::InstallType => self.install_type_view(),
-            Step::Disk => self.disk_view(),
-            Step::Encryption => self.encryption_view(),
-            Step::Account => self.account_view(),
-            Step::Summary => self.summary_view(),
-            other => placeholder(other),
+        // Install and Done are centered hero screens; the rest are titled forms.
+        let (inner, centered): (Element<'_, Message>, bool) = match step {
+            Step::Install => (self.install_view(), true),
+            Step::Done => (self.done_view(), true),
+            _ => (self.form_page(step), false),
         };
 
-        // Constrain the whole thing to a comfortable column, centered horizontally.
-        let page = widget::column::with_capacity(2)
-            .spacing(24)
-            .push(header)
-            .push(content)
-            .width(Length::Fixed(620.0));
+        let framed = widget::container(widget::container(inner).width(Length::Fixed(620.0)))
+            .center_x(Length::Fill);
 
-        let body = widget::container(widget::container(page).center_x(Length::Fill))
+        let content_area = if centered {
+            widget::column::with_capacity(3)
+                .push(widget::Space::new().height(Length::Fill))
+                .push(framed)
+                .push(widget::Space::new().height(Length::Fill))
+        } else {
+            widget::column::with_capacity(2)
+                .push(framed)
+                .push(widget::Space::new().height(Length::Fill))
+        };
+
+        let padding = if centered {
+            Padding { top: 24.0, right: 32.0, bottom: 24.0, left: 32.0 }
+        } else {
+            Padding { top: 40.0, right: 32.0, bottom: 8.0, left: 32.0 }
+        };
+
+        let body = widget::container(content_area)
             .width(Length::Fill)
             .height(Length::Fill)
-            .padding(Padding {
-                top: 40.0,
-                right: 32.0,
-                bottom: 8.0,
-                left: 32.0,
-            });
+            .padding(padding);
 
         widget::column::with_capacity(2)
             .push(body)
             .push(self.footer())
             .into()
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        // Only tick while the install screen is animating.
+        if Step::ALL[self.step] == Step::Install && self.install_progress < 1.0 {
+            cosmic::iced::time::every(Duration::from_millis(90)).map(|_| Message::Tick)
+        } else {
+            Subscription::none()
+        }
     }
 }
 
@@ -179,6 +205,95 @@ impl Installer {
         !self.config.username.trim().is_empty()
             && !self.config.password.is_empty()
             && self.config.password == self.password_confirm
+    }
+
+    /// Titled form layout: heading + subtitle above the step's content.
+    fn form_page(&self, step: Step) -> Element<'_, Message> {
+        let header = widget::column::with_capacity(2)
+            .spacing(4)
+            .push(widget::text::title2(step.title()))
+            .push(widget::text::body(step.subtitle()));
+
+        let content = match step {
+            Step::Language => self.radio_list(LANGUAGES, self.config.language, Message::SelectLanguage),
+            Step::Keyboard => self.radio_list(KEYBOARDS, self.config.keyboard, Message::SelectKeyboard),
+            Step::InstallType => self.install_type_view(),
+            Step::Disk => self.disk_view(),
+            Step::Encryption => self.encryption_view(),
+            Step::Account => self.account_view(),
+            Step::Summary => self.summary_view(),
+            // Install/Done are hero screens, never routed through form_page.
+            Step::Install | Step::Done => placeholder(step),
+        };
+
+        widget::column::with_capacity(2)
+            .spacing(24)
+            .push(header)
+            .push(content)
+            .into()
+    }
+
+    /// Install progress: a rotating highlight, the current phase, and a bar.
+    fn install_view(&self) -> Element<'_, Message> {
+        const TIPS: [(&str, &str, &str); 4] = [
+            ("video-display-symbolic", "A desktop with depth", "COSMIC with real glass, tuned to stay out of your way."),
+            ("system-software-install-symbolic", "Curated apps", "A store, control center and companion tools that feel like one system."),
+            ("utilities-system-monitor-symbolic", "Tuned for speed", "A performance-first Arch base with the CachyOS kernel."),
+            ("security-high-symbolic", "Open and yours", "The polish of a curated OS with the freedom of Linux underneath."),
+        ];
+        let idx = ((self.install_progress * TIPS.len() as f32) as usize).min(TIPS.len() - 1);
+        let (icon, title, detail) = TIPS[idx];
+
+        let highlight = widget::column::with_capacity(3)
+            .spacing(12)
+            .width(Length::Fill)
+            .align_x(Alignment::Center)
+            .push(widget::icon::from_name(icon).size(72).icon())
+            .push(widget::text::title3(title))
+            .push(widget::text::body(detail).center());
+
+        let pct = (self.install_progress * 100.0).round() as u32;
+
+        widget::column::with_capacity(6)
+            .spacing(20)
+            .width(Length::Fill)
+            .align_x(Alignment::Center)
+            .push(widget::text::title1("Installing DraftOS"))
+            .push(highlight)
+            .push(widget::Space::new().height(Length::Fixed(8.0)))
+            .push(widget::text::body(self.install_phase()))
+            .push(
+                widget::container(
+                    widget::determinate_linear(self.install_progress).width(Length::Fixed(360.0)),
+                )
+                .center_x(Length::Fill),
+            )
+            .push(widget::text::caption(format!("{pct}%")))
+            .into()
+    }
+
+    /// Human label for the current install phase, derived from progress.
+    fn install_phase(&self) -> &'static str {
+        match (self.install_progress * 6.0) as usize {
+            0 => "Preparing the disk…",
+            1 => "Creating partitions…",
+            2 => "Installing the base system…",
+            3 => "Installing the COSMIC desktop…",
+            4 => "Configuring your system…",
+            _ => "Finishing up…",
+        }
+    }
+
+    /// Success screen shown when the install completes.
+    fn done_view(&self) -> Element<'_, Message> {
+        widget::column::with_capacity(3)
+            .spacing(20)
+            .width(Length::Fill)
+            .align_x(Alignment::Center)
+            .push(widget::icon::from_name("emblem-default-symbolic").size(96).icon())
+            .push(widget::text::title1("DraftOS is installed"))
+            .push(widget::text::body("Remove the installation media, then restart to begin.").center())
+            .into()
     }
 
     /// A selectable list of `(display, _)` options rendered as radios in a card.
@@ -399,9 +514,10 @@ impl Installer {
     /// Bottom navigation: Back · step counter · Continue/Install/Restart.
     fn footer(&self) -> Element<'_, Message> {
         let step = Step::ALL[self.step];
-        let is_first = self.step == 0;
+        // No going back from the first step, or once installing / finished.
+        let hide_back = self.step == 0 || matches!(step, Step::Install | Step::Done);
 
-        let left: Element<'_, Message> = if is_first {
+        let left: Element<'_, Message> = if hide_back {
             widget::Space::new().into()
         } else {
             widget::button::standard("Back").on_press(Message::Back).into()
