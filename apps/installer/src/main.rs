@@ -8,6 +8,7 @@
 mod app;
 mod config;
 mod steps;
+mod system;
 
 use cosmic::app::Settings;
 use cosmic::iced::Size;

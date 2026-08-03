@@ -24,6 +24,12 @@ pub struct InstallConfig {
     /// Index into [`KEYBOARDS`].
     pub keyboard: Option<usize>,
     pub install_type: Option<InstallType>,
+    /// Target disk device path (e.g. `/dev/nvme0n1`), set on the Disk step.
+    pub disk: Option<String>,
+    /// Whether to set up LUKS full-disk encryption.
+    pub encrypt: bool,
+    /// LUKS passphrase; kept in memory only for the length of the install.
+    pub luks_password: String,
     // Account (filled on the Account step).
     pub full_name: String,
     pub username: String,

@@ -7,6 +7,7 @@ use cosmic::{executor, Core};
 
 use crate::config::{InstallConfig, InstallType, KEYBOARDS, LANGUAGES};
 use crate::steps::Step;
+use crate::system::{self, DiskInfo};
 
 /// Wizard events.
 #[derive(Clone, Debug)]
@@ -17,6 +18,10 @@ pub enum Message {
     SelectLanguage(usize),
     SelectKeyboard(usize),
     SelectInstallType(InstallType),
+    SelectDisk(usize),
+    ToggleEncrypt(bool),
+    SetLuksPassword(String),
+    SetLuksConfirm(String),
     SetFullName(String),
     SetUsername(String),
     SetHostname(String),
@@ -31,6 +36,12 @@ pub struct Installer {
     step: usize,
     /// Choices collected so far.
     config: InstallConfig,
+    /// Whole disks detected on the host, offered on the Disk step.
+    disks: Vec<DiskInfo>,
+    /// Index into [`Installer::disks`] of the chosen target.
+    selected_disk: Option<usize>,
+    /// LUKS passphrase re-entry, UI-only, to check it matches.
+    luks_confirm: String,
     /// Password re-entry, kept in the UI only to check it matches.
     password_confirm: String,
 }
@@ -60,6 +71,9 @@ impl cosmic::Application for Installer {
             core,
             step,
             config: InstallConfig::default(),
+            disks: system::detect_disks(),
+            selected_disk: None,
+            luks_confirm: String::new(),
             password_confirm: String::new(),
         };
         (installer, cosmic::app::Task::none())
@@ -77,6 +91,13 @@ impl cosmic::Application for Installer {
             Message::SelectLanguage(i) => self.config.language = Some(i),
             Message::SelectKeyboard(i) => self.config.keyboard = Some(i),
             Message::SelectInstallType(t) => self.config.install_type = Some(t),
+            Message::SelectDisk(i) => {
+                self.selected_disk = Some(i);
+                self.config.disk = self.disks.get(i).map(DiskInfo::device);
+            }
+            Message::ToggleEncrypt(on) => self.config.encrypt = on,
+            Message::SetLuksPassword(v) => self.config.luks_password = v,
+            Message::SetLuksConfirm(v) => self.luks_confirm = v,
             Message::SetFullName(v) => self.config.full_name = v,
             Message::SetUsername(v) => self.config.username = v,
             Message::SetHostname(v) => self.config.hostname = v,
@@ -103,6 +124,8 @@ impl cosmic::Application for Installer {
             Step::Language => self.radio_list(LANGUAGES, self.config.language, Message::SelectLanguage),
             Step::Keyboard => self.radio_list(KEYBOARDS, self.config.keyboard, Message::SelectKeyboard),
             Step::InstallType => self.install_type_view(),
+            Step::Disk => self.disk_view(),
+            Step::Encryption => self.encryption_view(),
             Step::Account => self.account_view(),
             Step::Summary => self.summary_view(),
             other => placeholder(other),
@@ -139,6 +162,12 @@ impl Installer {
             Step::Language => self.config.language.is_some(),
             Step::Keyboard => self.config.keyboard.is_some(),
             Step::InstallType => self.config.install_type.is_some(),
+            Step::Disk => self.selected_disk.is_some(),
+            Step::Encryption => {
+                !self.config.encrypt
+                    || (!self.config.luks_password.is_empty()
+                        && self.config.luks_password == self.luks_confirm)
+            }
             Step::Account => self.account_ok(),
             _ => true,
         }
@@ -207,6 +236,81 @@ impl Installer {
             .into()
     }
 
+    /// Target-disk picker, populated from `lsblk`.
+    fn disk_view(&self) -> Element<'_, Message> {
+        if self.disks.is_empty() {
+            return widget::container(
+                widget::column::with_capacity(2)
+                    .spacing(6)
+                    .push(widget::text::heading("No disks found"))
+                    .push(widget::text::caption(
+                        "No installable disks were detected on this system.",
+                    )),
+            )
+            .padding(16)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card)
+            .into();
+        }
+
+        let mut col = widget::column::with_capacity(self.disks.len()).spacing(4);
+        for (i, disk) in self.disks.iter().enumerate() {
+            let label = widget::column::with_capacity(2)
+                .spacing(1)
+                .push(widget::text::body(disk.label()))
+                .push(widget::text::caption(disk.device()));
+            col = col.push(
+                widget::radio(label, i, self.selected_disk, Message::SelectDisk).width(Length::Fill),
+            );
+        }
+        let list = widget::container(col)
+            .padding(12)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card);
+
+        widget::column::with_capacity(2)
+            .spacing(8)
+            .push(list)
+            .push(widget::text::caption(
+                "The selected disk will be erased during a clean install.",
+            ))
+            .into()
+    }
+
+    /// Optional full-disk (LUKS) encryption toggle and passphrase.
+    fn encryption_view(&self) -> Element<'_, Message> {
+        let toggle = widget::settings::item(
+            "Encrypt this installation",
+            widget::toggler(self.config.encrypt).on_toggle(Message::ToggleEncrypt),
+        );
+
+        let mut col = widget::column::with_capacity(4).spacing(8).push(toggle);
+        if self.config.encrypt {
+            col = col
+                .push(widget::settings::item(
+                    "Passphrase",
+                    widget::secure_input(String::new(), self.config.luks_password.clone(), None, true)
+                        .on_input(Message::SetLuksPassword)
+                        .width(Length::Fixed(300.0)),
+                ))
+                .push(widget::settings::item(
+                    "Confirm passphrase",
+                    widget::secure_input(String::new(), self.luks_confirm.clone(), None, true)
+                        .on_input(Message::SetLuksConfirm)
+                        .width(Length::Fixed(300.0)),
+                ));
+            if !self.luks_confirm.is_empty() && self.config.luks_password != self.luks_confirm {
+                col = col.push(widget::text::caption("Passphrases do not match."));
+            }
+        }
+
+        widget::container(col)
+            .padding(16)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card)
+            .into()
+    }
+
     /// Account creation form.
     fn account_view(&self) -> Element<'_, Message> {
         let text_field = |label: &'static str,
@@ -272,11 +376,16 @@ impl Installer {
             widget::settings::item(label, widget::text::body(value.to_string()))
         };
 
-        let rows = widget::column::with_capacity(5)
+        let disk = self.config.disk.as_deref().unwrap_or("—");
+        let encryption = if self.config.encrypt { "On (LUKS)" } else { "Off" };
+
+        let rows = widget::column::with_capacity(7)
             .spacing(8)
             .push(row("Language", lang))
             .push(row("Keyboard", kbd))
             .push(row("Installation", install))
+            .push(widget::settings::item("Disk", widget::text::body(disk.to_string())))
+            .push(row("Encryption", encryption))
             .push(widget::settings::item("Username", widget::text::body(user.to_string())))
             .push(widget::settings::item("Computer name", widget::text::body(host.to_string())));
 
