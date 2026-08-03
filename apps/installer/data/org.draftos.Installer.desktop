@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Install DraftOS
+GenericName=System Installer
+Comment=Install DraftOS to your computer
+Exec=draftos-installer
+Icon=org.draftos.Installer
+Categories=System;
+Keywords=install;installer;setup;draftos;
+StartupNotify=true

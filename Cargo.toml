@@ -10,6 +10,7 @@ resolver = "2"
 members = [
     "crates/draftos-common",
     "apps/welcome",
+    "apps/installer",
     # "crates/draftos-link",
     # "cli/draftos",
     # "cli/draftbox",

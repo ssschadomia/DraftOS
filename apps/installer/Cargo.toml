@@ -1,0 +1,23 @@
+[package]
+name = "draftos-installer"
+description = "DraftOS system installer — a libcosmic wizard (System76/Pop!_OS-style flow)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "draftos-installer"
+path = "src/main.rs"
+
+[dependencies]
+draftos-common.workspace = true
+libcosmic = { workspace = true, features = [
+    "winit",
+    "tokio",
+    "xdg-portal",
+    "single-instance",
+    "wgpu",
+    "wayland",
+] }
