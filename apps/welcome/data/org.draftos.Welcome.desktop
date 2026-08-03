@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DraftOS Hello
+GenericName=Welcome
+Comment=Get started with DraftOS
+Exec=draftos-welcome
+Icon=org.draftos.Welcome
+Categories=System;Utility;
+Keywords=welcome;onboarding;getting started;draftos;
+StartupNotify=true
+X-GNOME-Autostart-enabled=false

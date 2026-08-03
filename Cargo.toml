@@ -9,6 +9,7 @@
 resolver = "2"
 members = [
     "crates/draftos-common",
+    "apps/welcome",
     # "crates/draftos-link",
     # "cli/draftos",
     # "cli/draftbox",
@@ -28,9 +29,11 @@ authors = ["DraftOS contributors"]
 # CLI
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-# libcosmic apps are pulled from the COSMIC git repo; pin the ref when the first
-# GUI crate lands so all apps track the same libcosmic revision.
-# libcosmic = { git = "https://github.com/pop-os/libcosmic" }
+# libcosmic apps are pulled from the COSMIC git repo, pinned to one revision so
+# every GUI app tracks the same libcosmic API. This rev (v1.0.0) is the one
+# verified working in the prior iteration. Apps opt into the feature set they need.
+libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "dc1cf9f00cbe2902a52166492654bb9fee8a73d1", default-features = false }
+draftos-common = { path = "crates/draftos-common" }
 
 [profile.release]
 lto = "thin"
