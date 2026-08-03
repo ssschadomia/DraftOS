@@ -42,7 +42,14 @@ impl cosmic::Application for Welcome {
     }
 
     fn init(core: Core, _flags: ()) -> (Self, cosmic::app::Task<Message>) {
-        (Welcome { core, page: 0 }, cosmic::app::Task::none())
+        // Dev hook: DRAFTOS_WELCOME_PAGE=<n> opens directly on a given step, so
+        // each page can be previewed/screenshot without clicking through.
+        let page = std::env::var("DRAFTOS_WELCOME_PAGE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&i| i < Page::ALL.len())
+            .unwrap_or(0);
+        (Welcome { core, page }, cosmic::app::Task::none())
     }
 
     fn update(&mut self, message: Message) -> cosmic::app::Task<Message> {
