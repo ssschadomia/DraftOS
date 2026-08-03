@@ -51,6 +51,33 @@ pub fn detect_disks() -> Vec<DiskInfo> {
         .collect()
 }
 
+/// All IANA time zones known to the system, via `timedatectl list-timezones`.
+/// Empty if the command is unavailable.
+pub fn detect_timezones() -> Vec<String> {
+    Command::new("timedatectl")
+        .arg("list-timezones")
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The system's current time zone, e.g. `Europe/Moscow`, if it can be read.
+pub fn current_timezone() -> Option<String> {
+    let out = Command::new("timedatectl")
+        .args(["show", "-p", "Timezone", "--value"])
+        .output()
+        .ok()?;
+    let tz = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!tz.is_empty()).then_some(tz)
+}
+
 fn is_virtual(name: &str) -> bool {
     ["zram", "loop", "ram", "sr", "fd"]
         .iter()

@@ -21,6 +21,8 @@ pub enum Message {
     Tick,
     SelectLanguage(usize),
     SelectKeyboard(usize),
+    SelectTimezone(usize),
+    SetTimezoneSearch(String),
     SelectInstallType(InstallType),
     SelectDisk(usize),
     ToggleEncrypt(bool),
@@ -40,6 +42,12 @@ pub struct Installer {
     step: usize,
     /// Choices collected so far.
     config: InstallConfig,
+    /// Time zones known to the system, offered on the Timezone step.
+    timezones: Vec<String>,
+    /// Index into [`Installer::timezones`] of the chosen zone.
+    selected_tz: Option<usize>,
+    /// Current filter text on the Timezone step.
+    tz_search: String,
     /// Whole disks detected on the host, offered on the Disk step.
     disks: Vec<DiskInfo>,
     /// Index into [`Installer::disks`] of the chosen target.
@@ -73,10 +81,22 @@ impl cosmic::Application for Installer {
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|&i| i < Step::ALL.len())
             .unwrap_or(0);
+        // Detect time zones and preselect the system's current one.
+        let timezones = system::detect_timezones();
+        let mut config = InstallConfig::default();
+        let selected_tz = system::current_timezone()
+            .and_then(|tz| timezones.iter().position(|z| *z == tz));
+        if let Some(i) = selected_tz {
+            config.timezone = Some(timezones[i].clone());
+        }
+
         let installer = Installer {
             core,
             step,
-            config: InstallConfig::default(),
+            config,
+            timezones,
+            selected_tz,
+            tz_search: String::new(),
             disks: system::detect_disks(),
             selected_disk: None,
             luks_confirm: String::new(),
@@ -108,6 +128,11 @@ impl cosmic::Application for Installer {
             }
             Message::SelectLanguage(i) => self.config.language = Some(i),
             Message::SelectKeyboard(i) => self.config.keyboard = Some(i),
+            Message::SelectTimezone(i) => {
+                self.selected_tz = Some(i);
+                self.config.timezone = self.timezones.get(i).cloned();
+            }
+            Message::SetTimezoneSearch(v) => self.tz_search = v,
             Message::SelectInstallType(t) => self.config.install_type = Some(t),
             Message::SelectDisk(i) => {
                 self.selected_disk = Some(i);
@@ -187,6 +212,7 @@ impl Installer {
         match Step::ALL[self.step] {
             Step::Language => self.config.language.is_some(),
             Step::Keyboard => self.config.keyboard.is_some(),
+            Step::Timezone => self.config.timezone.is_some(),
             Step::InstallType => self.config.install_type.is_some(),
             Step::Disk => self.selected_disk.is_some(),
             Step::Encryption => {
@@ -217,6 +243,7 @@ impl Installer {
         let content = match step {
             Step::Language => self.radio_list(LANGUAGES, self.config.language, Message::SelectLanguage),
             Step::Keyboard => self.radio_list(KEYBOARDS, self.config.keyboard, Message::SelectKeyboard),
+            Step::Timezone => self.timezone_view(),
             Step::InstallType => self.install_type_view(),
             Step::Disk => self.disk_view(),
             Step::Encryption => self.encryption_view(),
@@ -348,6 +375,51 @@ impl Installer {
                 "Assign existing partitions yourself.",
                 InstallType::Custom,
             ))
+            .into()
+    }
+
+    /// Time-zone picker: a search field over a scrollable list from the system.
+    fn timezone_view(&self) -> Element<'_, Message> {
+        let search = widget::search_input("Search time zones", self.tz_search.as_str())
+            .on_input(Message::SetTimezoneSearch);
+
+        let query = self.tz_search.trim().to_lowercase();
+        const CAP: usize = 200;
+        let mut col = widget::column::with_capacity(64).spacing(2);
+        let mut shown = 0usize;
+        let mut more = false;
+        for (i, tz) in self.timezones.iter().enumerate() {
+            if !query.is_empty() && !tz.to_lowercase().contains(&query) {
+                continue;
+            }
+            if shown >= CAP {
+                more = true;
+                break;
+            }
+            col = col.push(
+                widget::radio(widget::text::body(tz.as_str()), i, self.selected_tz, Message::SelectTimezone)
+                    .width(Length::Fill),
+            );
+            shown += 1;
+        }
+        if self.timezones.is_empty() {
+            col = col.push(widget::text::caption("No time zones were detected."));
+        } else if more {
+            col = col.push(widget::text::caption("Refine your search to see more."));
+        }
+
+        let list = widget::scrollable(
+            widget::container(col)
+                .padding(12)
+                .width(Length::Fill)
+                .class(cosmic::theme::Container::Card),
+        )
+        .height(Length::Fixed(300.0));
+
+        widget::column::with_capacity(2)
+            .spacing(8)
+            .push(search)
+            .push(list)
             .into()
     }
 
@@ -492,12 +564,14 @@ impl Installer {
         };
 
         let disk = self.config.disk.as_deref().unwrap_or("—");
+        let tz = self.config.timezone.as_deref().unwrap_or("—");
         let encryption = if self.config.encrypt { "On (LUKS)" } else { "Off" };
 
-        let rows = widget::column::with_capacity(7)
+        let rows = widget::column::with_capacity(8)
             .spacing(8)
             .push(row("Language", lang))
             .push(row("Keyboard", kbd))
+            .push(widget::settings::item("Time zone", widget::text::body(tz.to_string())))
             .push(row("Installation", install))
             .push(widget::settings::item("Disk", widget::text::body(disk.to_string())))
             .push(row("Encryption", encryption))

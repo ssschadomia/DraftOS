@@ -23,6 +23,8 @@ pub struct InstallConfig {
     pub language: Option<usize>,
     /// Index into [`KEYBOARDS`].
     pub keyboard: Option<usize>,
+    /// IANA time zone (e.g. `Europe/Moscow`), set on the Timezone step.
+    pub timezone: Option<String>,
     pub install_type: Option<InstallType>,
     /// Target disk device path (e.g. `/dev/nvme0n1`), set on the Disk step.
     pub disk: Option<String>,

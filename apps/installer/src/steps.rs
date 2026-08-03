@@ -5,6 +5,7 @@
 pub enum Step {
     Language,
     Keyboard,
+    Timezone,
     InstallType,
     Disk,
     Encryption,
@@ -16,9 +17,10 @@ pub enum Step {
 
 impl Step {
     /// All steps in display order.
-    pub const ALL: [Step; 9] = [
+    pub const ALL: [Step; 10] = [
         Step::Language,
         Step::Keyboard,
+        Step::Timezone,
         Step::InstallType,
         Step::Disk,
         Step::Encryption,
@@ -33,6 +35,7 @@ impl Step {
         match self {
             Step::Language => "Welcome",
             Step::Keyboard => "Keyboard layout",
+            Step::Timezone => "Time zone",
             Step::InstallType => "Install DraftOS",
             Step::Disk => "Choose a disk",
             Step::Encryption => "Encryption",
@@ -48,6 +51,7 @@ impl Step {
         match self {
             Step::Language => "Choose your language to get started.",
             Step::Keyboard => "Pick the layout that matches your keyboard.",
+            Step::Timezone => "Set your time zone.",
             Step::InstallType => "How would you like to install?",
             Step::Disk => "Select where DraftOS will be installed.",
             Step::Encryption => "Optionally protect your data with full-disk encryption.",
