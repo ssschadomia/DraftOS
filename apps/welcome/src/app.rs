@@ -62,8 +62,11 @@ impl cosmic::Application for Welcome {
                     self.page = i;
                 }
             }
-            // TODO: swap for a proper window-close task once verified live.
-            Message::Close => std::process::exit(0),
+            Message::Close => {
+                if let Some(id) = self.core.main_window_id() {
+                    return cosmic::iced::window::close(id);
+                }
+            }
         }
         cosmic::app::Task::none()
     }
