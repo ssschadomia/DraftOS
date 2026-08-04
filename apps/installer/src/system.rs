@@ -101,6 +101,63 @@ pub fn current_timezone() -> Option<String> {
     (!tz.is_empty()).then_some(tz)
 }
 
+/// All XKB keyboard layouts as `(code, description)`, parsed from the X11 rules
+/// list (`evdev.lst`); falls back to bare codes from `localectl`. Empty if neither
+/// source is available.
+pub fn detect_keyboard_layouts() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Ok(content) = std::fs::read_to_string("/usr/share/X11/xkb/rules/evdev.lst") {
+        let mut in_section = false;
+        for line in content.lines() {
+            if line.starts_with("! layout") {
+                in_section = true;
+                continue;
+            }
+            if line.starts_with('!') {
+                in_section = false;
+                continue;
+            }
+            if !in_section {
+                continue;
+            }
+            let line = line.trim();
+            if let Some((code, desc)) = line.split_once(char::is_whitespace) {
+                out.push((code.trim().to_string(), desc.trim().to_string()));
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Ok(o) = Command::new("localectl").arg("list-x11-keymap-layouts").output() {
+            for l in String::from_utf8_lossy(&o.stdout).lines() {
+                let l = l.trim();
+                if !l.is_empty() {
+                    out.push((l.to_string(), l.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The system's current keyboard layouts, from `localectl status`
+/// (`X11 Layout: us,ru` → `["us", "ru"]`).
+pub fn current_layouts() -> Vec<String> {
+    let Some(o) = Command::new("localectl").arg("status").output().ok() else {
+        return Vec::new();
+    };
+    for line in String::from_utf8_lossy(&o.stdout).lines() {
+        if let Some(v) = line.trim().strip_prefix("X11 Layout:") {
+            return v
+                .trim()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
 fn is_virtual(name: &str) -> bool {
     ["zram", "loop", "ram", "sr", "fd"]
         .iter()

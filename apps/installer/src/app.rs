@@ -7,7 +7,7 @@ use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::{executor, Core};
 
-use crate::config::{InstallConfig, InstallType, KEYBOARDS};
+use crate::config::{InstallConfig, InstallType, KEYBOARD_SWITCHES};
 use crate::locale_names;
 use crate::steps::Step;
 use crate::system::{self, DiskInfo};
@@ -22,7 +22,13 @@ pub enum Message {
     Tick,
     SelectLocale(usize),
     SetLocaleSearch(String),
-    SelectKeyboard(usize),
+    AddLayout(String),
+    RemoveLayout(usize),
+    MoveLayoutUp(usize),
+    MoveLayoutDown(usize),
+    SetLayoutSearch(String),
+    SetKeyboardSwitch(usize),
+    SetKeyboardTest(String),
     SelectTimezone(usize),
     SetTimezoneSearch(String),
     SelectInstallType(InstallType),
@@ -53,6 +59,12 @@ pub struct Installer {
     selected_locale: Option<usize>,
     /// Current filter text on the Language step.
     locale_search: String,
+    /// All XKB layouts as (code, description), offered on the Keyboard step.
+    layouts: Vec<(String, String)>,
+    /// Current filter text on the Keyboard step's "add layout" list.
+    layout_search: String,
+    /// Scratch text for the keyboard test field.
+    kbd_test: String,
     /// Time zones known to the system, offered on the Timezone step.
     timezones: Vec<String>,
     /// Index into [`Installer::timezones`] of the chosen zone.
@@ -104,6 +116,24 @@ impl cosmic::Application for Installer {
             config.locale = Some(locales[i].clone());
         }
 
+        // Detect keyboard layouts; seed the selection from the current system
+        // layouts (falling back to "us"), and default the switch to Alt+Shift.
+        let layouts = system::detect_keyboard_layouts();
+        let known = |code: &str| layouts.iter().any(|(c, _)| c == code);
+        let mut seed: Vec<String> = system::current_layouts()
+            .into_iter()
+            .filter(|c| known(c))
+            .collect();
+        if seed.is_empty() {
+            seed.push(if known("us") {
+                "us".to_string()
+            } else {
+                layouts.first().map_or_else(|| "us".to_string(), |(c, _)| c.clone())
+            });
+        }
+        config.keyboard_layouts = seed;
+        config.keyboard_switch = Some(0);
+
         // Detect time zones and preselect the system's current one.
         let timezones = system::detect_timezones();
         let selected_tz = system::current_timezone()
@@ -119,6 +149,9 @@ impl cosmic::Application for Installer {
             locales,
             selected_locale,
             locale_search: String::new(),
+            layouts,
+            layout_search: String::new(),
+            kbd_test: String::new(),
             timezones,
             selected_tz,
             tz_search: String::new(),
@@ -157,7 +190,29 @@ impl cosmic::Application for Installer {
                 self.config.locale = self.locales.get(i).cloned();
             }
             Message::SetLocaleSearch(v) => self.locale_search = v,
-            Message::SelectKeyboard(i) => self.config.keyboard = Some(i),
+            Message::AddLayout(code) => {
+                if !self.config.keyboard_layouts.contains(&code) {
+                    self.config.keyboard_layouts.push(code);
+                }
+            }
+            Message::RemoveLayout(i) => {
+                if i < self.config.keyboard_layouts.len() {
+                    self.config.keyboard_layouts.remove(i);
+                }
+            }
+            Message::MoveLayoutUp(i) => {
+                if i > 0 && i < self.config.keyboard_layouts.len() {
+                    self.config.keyboard_layouts.swap(i - 1, i);
+                }
+            }
+            Message::MoveLayoutDown(i) => {
+                if i + 1 < self.config.keyboard_layouts.len() {
+                    self.config.keyboard_layouts.swap(i, i + 1);
+                }
+            }
+            Message::SetLayoutSearch(v) => self.layout_search = v,
+            Message::SetKeyboardSwitch(i) => self.config.keyboard_switch = Some(i),
+            Message::SetKeyboardTest(v) => self.kbd_test = v,
             Message::SelectTimezone(i) => {
                 self.selected_tz = Some(i);
                 self.config.timezone = self.timezones.get(i).cloned();
@@ -245,7 +300,7 @@ impl Installer {
     fn can_advance(&self) -> bool {
         match Step::ALL[self.step] {
             Step::Language => self.config.locale.is_some(),
-            Step::Keyboard => self.config.keyboard.is_some(),
+            Step::Keyboard => !self.config.keyboard_layouts.is_empty(),
             Step::Timezone => self.config.timezone.is_some(),
             Step::InstallType => self.config.install_type.is_some(),
             Step::Disk => self.selected_disk.is_some(),
@@ -280,7 +335,7 @@ impl Installer {
 
         let content = match step {
             Step::Language => self.language_view(),
-            Step::Keyboard => self.radio_list(KEYBOARDS, self.config.keyboard, Message::SelectKeyboard),
+            Step::Keyboard => self.keyboard_view(),
             Step::Timezone => self.timezone_view(),
             Step::InstallType => self.install_type_view(),
             Step::Disk => self.disk_view(),
@@ -361,27 +416,102 @@ impl Installer {
             .into()
     }
 
-    /// A selectable list of `(display, _)` options rendered as radios in a card.
-    fn radio_list(
-        &self,
-        options: &'static [(&'static str, &'static str)],
-        selected: Option<usize>,
-        on_select: fn(usize) -> Message,
-    ) -> Element<'_, Message> {
-        let mut col = widget::column::with_capacity(options.len()).spacing(2);
-        for (i, (label, _)) in options.iter().enumerate() {
-            col = col.push(
-                widget::radio(widget::text::body(*label), i, selected, on_select)
-                    .width(Length::Fill),
-            );
+    /// Description for a layout code (e.g. `us` → "English (US)").
+    fn layout_desc(&self, code: &str) -> String {
+        self.layouts
+            .iter()
+            .find(|(c, _)| c == code)
+            .map_or_else(|| code.to_string(), |(_, d)| d.clone())
+    }
+
+    /// Keyboard step: ordered layouts with reorder/remove, a switch shortcut, an
+    /// "add layout" search list, and a test field.
+    fn keyboard_view(&self) -> Element<'_, Message> {
+        let layouts = &self.config.keyboard_layouts;
+        let last = layouts.len().saturating_sub(1);
+
+        // Selected layouts, each with move up/down and remove controls.
+        let mut chosen = widget::column::with_capacity(layouts.len()).spacing(2);
+        for (i, code) in layouts.iter().enumerate() {
+            let name = if i == 0 {
+                format!("{}  (primary)", self.layout_desc(code))
+            } else {
+                self.layout_desc(code)
+            };
+            let icon_btn = |icon: &str, msg: Option<Message>| {
+                let b = widget::button::icon(widget::icon::from_name(icon).size(16));
+                match msg {
+                    Some(m) => b.on_press(m),
+                    None => b,
+                }
+            };
+            let row = widget::row::with_capacity(4)
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .push(widget::text::body(name).width(Length::Fill))
+                .push(icon_btn("go-up-symbolic", (i > 0).then_some(Message::MoveLayoutUp(i))))
+                .push(icon_btn("go-down-symbolic", (i < last).then_some(Message::MoveLayoutDown(i))))
+                .push(icon_btn("list-remove-symbolic", (layouts.len() > 1).then_some(Message::RemoveLayout(i))));
+            chosen = chosen.push(widget::container(row).padding([4, 8]));
         }
-        widget::scrollable(
-            widget::container(col)
-                .padding(12)
+        let chosen = widget::container(chosen)
+            .padding(8)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card);
+
+        let mut root = widget::column::with_capacity(5).spacing(10).push(chosen);
+
+        // Switch shortcut, relevant only with two or more layouts.
+        if layouts.len() > 1 {
+            let switch_labels: Vec<&str> = KEYBOARD_SWITCHES.iter().map(|(l, _)| *l).collect();
+            root = root.push(widget::settings::item(
+                "Switch layouts",
+                widget::dropdown(switch_labels, self.config.keyboard_switch, Message::SetKeyboardSwitch),
+            ));
+        }
+
+        // Add-a-layout searchable list (excludes already-chosen layouts).
+        let search = widget::search_input("Add a layout", self.layout_search.as_str())
+            .on_input(Message::SetLayoutSearch);
+        let query = self.layout_search.trim().to_lowercase();
+        let mut add = widget::column::with_capacity(32).spacing(1);
+        let mut shown = 0usize;
+        for (code, desc) in &self.layouts {
+            if layouts.contains(code) {
+                continue;
+            }
+            if !query.is_empty()
+                && !desc.to_lowercase().contains(&query)
+                && !code.to_lowercase().contains(&query)
+            {
+                continue;
+            }
+            if shown >= 200 {
+                break;
+            }
+            add = add.push(
+                widget::button::text(desc.clone())
+                    .width(Length::Fill)
+                    .on_press(Message::AddLayout(code.clone())),
+            );
+            shown += 1;
+        }
+        let add_list = widget::scrollable(
+            widget::container(add)
+                .padding(8)
                 .width(Length::Fill)
                 .class(cosmic::theme::Container::Card),
         )
-        .into()
+        .height(Length::Fixed(140.0));
+        root = root.push(search).push(add_list);
+
+        // Test field.
+        root = root.push(
+            widget::text_input("Type here to test your keyboard", self.kbd_test.as_str())
+                .on_input(Message::SetKeyboardTest),
+        );
+
+        root.into()
     }
 
     /// The two install-type choices as radios with a title and description.
@@ -656,7 +786,16 @@ impl Installer {
             .locale
             .as_deref()
             .map_or_else(|| "—".to_string(), locale_names::friendly);
-        let kbd = self.config.keyboard.map_or("—", |i| KEYBOARDS[i].0);
+        let kbd = if self.config.keyboard_layouts.is_empty() {
+            "—".to_string()
+        } else {
+            self.config
+                .keyboard_layouts
+                .iter()
+                .map(|c| self.layout_desc(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let install = self.config.install_type.map_or("—", InstallType::label);
         let admin = if self.config.root_separate {
             "Separate password"
@@ -685,7 +824,7 @@ impl Installer {
         let rows = widget::column::with_capacity(8)
             .spacing(8)
             .push(widget::settings::item("Language", widget::text::body(lang)))
-            .push(row("Keyboard", kbd))
+            .push(widget::settings::item("Keyboard", widget::text::body(kbd)))
             .push(widget::settings::item("Time zone", widget::text::body(tz.to_string())))
             .push(row("Installation", install))
             .push(widget::settings::item("Disk", widget::text::body(disk.to_string())))

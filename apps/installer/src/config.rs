@@ -37,8 +37,10 @@ impl InstallType {
 pub struct InstallConfig {
     /// Chosen locale (e.g. `en_US.UTF-8`), set on the Language step.
     pub locale: Option<String>,
-    /// Index into [`KEYBOARDS`].
-    pub keyboard: Option<usize>,
+    /// Ordered XKB layout codes (the first is primary), set on the Keyboard step.
+    pub keyboard_layouts: Vec<String>,
+    /// Index into [`KEYBOARD_SWITCHES`] for how to cycle layouts (when 2+).
+    pub keyboard_switch: Option<usize>,
     /// IANA time zone (e.g. `Europe/Moscow`), set on the Timezone step.
     pub timezone: Option<String>,
     pub install_type: Option<InstallType>,
@@ -61,13 +63,12 @@ pub struct InstallConfig {
     pub root_password: String,
 }
 
-/// (display name, XKB layout) offered on the Keyboard step.
-pub const KEYBOARDS: &[(&str, &str)] = &[
-    ("English (US)", "us"),
-    ("Russian", "ru"),
-    ("German", "de"),
-    ("Spanish", "es"),
-    ("French", "fr"),
-    ("Italian", "it"),
-    ("Portuguese (Brazil)", "br"),
+/// (label, XKB `grp:` option) for cycling between layouts, offered when two or
+/// more layouts are selected on the Keyboard step.
+pub const KEYBOARD_SWITCHES: &[(&str, &str)] = &[
+    ("Alt+Shift", "grp:alt_shift_toggle"),
+    ("Ctrl+Shift", "grp:ctrl_shift_toggle"),
+    ("Super+Space", "grp:win_space_toggle"),
+    ("Alt+Space", "grp:alt_space_toggle"),
+    ("Caps Lock", "grp:caps_toggle"),
 ];
