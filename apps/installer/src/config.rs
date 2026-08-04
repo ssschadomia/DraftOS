@@ -44,8 +44,12 @@ pub struct InstallConfig {
     /// IANA time zone (e.g. `Europe/Moscow`), set on the Timezone step.
     pub timezone: Option<String>,
     pub install_type: Option<InstallType>,
-    /// Target disk device path (e.g. `/dev/nvme0n1`), set on the Disk step.
+    /// Target disk device path (e.g. `/dev/nvme0n1`) for whole-disk installs.
     pub disk: Option<String>,
+    /// Manual partitioning: the partition to use as root (`/`).
+    pub root_partition: Option<String>,
+    /// Manual partitioning: the EFI system partition (`/boot/efi`), if any.
+    pub efi_partition: Option<String>,
     /// Whether to set up LUKS full-disk encryption.
     pub encrypt: bool,
     /// LUKS passphrase; kept in memory only for the length of the install.

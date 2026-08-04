@@ -10,7 +10,7 @@ use cosmic::{executor, Core};
 use crate::config::{InstallConfig, InstallType, KEYBOARD_SWITCHES};
 use crate::locale_names;
 use crate::steps::Step;
-use crate::system::{self, DiskInfo};
+use crate::system::{self, DiskInfo, PartInfo};
 
 /// Wizard events.
 #[derive(Clone, Debug)]
@@ -33,6 +33,8 @@ pub enum Message {
     SetTimezoneSearch(String),
     SelectInstallType(InstallType),
     SelectDisk(usize),
+    SetRootPartition(usize),
+    SetEfiPartition(usize),
     ToggleEncrypt(bool),
     SetLuksPassword(String),
     SetLuksConfirm(String),
@@ -75,6 +77,8 @@ pub struct Installer {
     disks: Vec<DiskInfo>,
     /// Index into [`Installer::disks`] of the chosen target.
     selected_disk: Option<usize>,
+    /// Partitions on the host, offered on the manual-partitioning Disk step.
+    partitions: Vec<PartInfo>,
     /// LUKS passphrase re-entry, UI-only, to check it matches.
     luks_confirm: String,
     /// Password re-entry, kept in the UI only to check it matches.
@@ -134,6 +138,17 @@ impl cosmic::Application for Installer {
         config.keyboard_layouts = seed;
         config.keyboard_switch = Some(0);
 
+        // Dev hook: DRAFTOS_INSTALLER_TYPE preselects an install type for previews.
+        if let Ok(t) = std::env::var("DRAFTOS_INSTALLER_TYPE") {
+            config.install_type = match t.as_str() {
+                "clean" => Some(InstallType::Clean),
+                "alongside" => Some(InstallType::Alongside),
+                "reinstall" => Some(InstallType::Reinstall),
+                "manual" => Some(InstallType::Manual),
+                _ => None,
+            };
+        }
+
         // Detect time zones and preselect the system's current one.
         let timezones = system::detect_timezones();
         let selected_tz = system::current_timezone()
@@ -157,6 +172,7 @@ impl cosmic::Application for Installer {
             tz_search: String::new(),
             disks: system::detect_disks(),
             selected_disk: None,
+            partitions: system::detect_partitions(),
             luks_confirm: String::new(),
             password_confirm: String::new(),
             root_confirm: String::new(),
@@ -222,6 +238,12 @@ impl cosmic::Application for Installer {
             Message::SelectDisk(i) => {
                 self.selected_disk = Some(i);
                 self.config.disk = self.disks.get(i).map(DiskInfo::device);
+            }
+            Message::SetRootPartition(i) => {
+                self.config.root_partition = self.partitions.get(i).map(PartInfo::device);
+            }
+            Message::SetEfiPartition(i) => {
+                self.config.efi_partition = self.partitions.get(i).map(PartInfo::device);
             }
             Message::ToggleEncrypt(on) => self.config.encrypt = on,
             Message::SetLuksPassword(v) => self.config.luks_password = v,
@@ -303,7 +325,13 @@ impl Installer {
             Step::Keyboard => !self.config.keyboard_layouts.is_empty(),
             Step::Timezone => self.config.timezone.is_some(),
             Step::InstallType => self.config.install_type.is_some(),
-            Step::Disk => self.selected_disk.is_some(),
+            Step::Disk => {
+                if self.config.install_type == Some(InstallType::Manual) {
+                    self.config.root_partition.is_some()
+                } else {
+                    self.selected_disk.is_some()
+                }
+            }
             Step::Encryption => {
                 !self.config.encrypt
                     || (!self.config.luks_password.is_empty()
@@ -641,8 +669,17 @@ impl Installer {
         )
     }
 
-    /// Target-disk picker, populated from `lsblk`.
+    /// Disk step — adapts to the chosen install type.
     fn disk_view(&self) -> Element<'_, Message> {
+        if self.config.install_type == Some(InstallType::Manual) {
+            self.manual_disk_view()
+        } else {
+            self.whole_disk_view()
+        }
+    }
+
+    /// Whole-disk picker (Clean / Alongside / Reinstall), with a type-specific note.
+    fn whole_disk_view(&self) -> Element<'_, Message> {
         if self.disks.is_empty() {
             return widget::container(
                 widget::column::with_capacity(2)
@@ -673,11 +710,67 @@ impl Installer {
             .width(Length::Fill)
             .class(cosmic::theme::Container::Card);
 
+        let note = match self.config.install_type {
+            Some(InstallType::Alongside) => {
+                "DraftOS will be installed in free space on the selected disk."
+            }
+            Some(InstallType::Reinstall) => {
+                "The existing DraftOS on the selected disk will be replaced."
+            }
+            _ => "The selected disk will be completely erased.",
+        };
+
         widget::column::with_capacity(2)
             .spacing(8)
             .push(list)
+            .push(widget::text::caption(note))
+            .into()
+    }
+
+    /// Manual partitioning: assign existing partitions to root and EFI.
+    fn manual_disk_view(&self) -> Element<'_, Message> {
+        if self.partitions.is_empty() {
+            return widget::container(
+                widget::column::with_capacity(2)
+                    .spacing(6)
+                    .push(widget::text::heading("No partitions found"))
+                    .push(widget::text::caption(
+                        "Create partitions with a disk tool first, then return here.",
+                    )),
+            )
+            .padding(16)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card)
+            .into();
+        }
+
+        let labels: Vec<String> = self.partitions.iter().map(PartInfo::label).collect();
+        let index_of = |dev: &Option<String>| {
+            dev.as_ref()
+                .and_then(|d| self.partitions.iter().position(|p| &p.device() == d))
+        };
+
+        let rows = widget::column::with_capacity(2)
+            .spacing(8)
+            .push(widget::settings::item(
+                "Root partition (/)",
+                widget::dropdown(labels.clone(), index_of(&self.config.root_partition), Message::SetRootPartition),
+            ))
+            .push(widget::settings::item(
+                "EFI partition (/boot/efi)",
+                widget::dropdown(labels, index_of(&self.config.efi_partition), Message::SetEfiPartition),
+            ));
+
+        widget::column::with_capacity(2)
+            .spacing(8)
+            .push(
+                widget::container(rows)
+                    .padding(16)
+                    .width(Length::Fill)
+                    .class(cosmic::theme::Container::Card),
+            )
             .push(widget::text::caption(
-                "The selected disk will be erased during a clean install.",
+                "Assigned partitions will be formatted. Other partitions are left untouched.",
             ))
             .into()
     }
@@ -817,7 +910,15 @@ impl Installer {
             widget::settings::item(label, widget::text::body(value.to_string()))
         };
 
-        let disk = self.config.disk.as_deref().unwrap_or("—");
+        let disk = if self.config.install_type == Some(InstallType::Manual) {
+            match (&self.config.root_partition, &self.config.efi_partition) {
+                (Some(r), Some(e)) => format!("root {r}, EFI {e}"),
+                (Some(r), None) => format!("root {r}"),
+                _ => "—".to_string(),
+            }
+        } else {
+            self.config.disk.clone().unwrap_or_else(|| "—".to_string())
+        };
         let tz = self.config.timezone.as_deref().unwrap_or("—");
         let encryption = if self.config.encrypt { "On (LUKS)" } else { "Off" };
 
@@ -827,7 +928,7 @@ impl Installer {
             .push(widget::settings::item("Keyboard", widget::text::body(kbd)))
             .push(widget::settings::item("Time zone", widget::text::body(tz.to_string())))
             .push(row("Installation", install))
-            .push(widget::settings::item("Disk", widget::text::body(disk.to_string())))
+            .push(widget::settings::item("Disk", widget::text::body(disk)))
             .push(row("Encryption", encryption))
             .push(widget::settings::item("Username", widget::text::body(user.to_string())))
             .push(widget::settings::item("Computer name", widget::text::body(host.to_string())))

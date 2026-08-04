@@ -32,6 +32,44 @@ impl DiskInfo {
     }
 }
 
+/// A partition on a disk, offered on the manual-partitioning step.
+#[derive(Debug, Clone)]
+pub struct PartInfo {
+    pub name: String,
+    pub size: String,
+    /// Filesystem type, empty if unformatted.
+    pub fstype: String,
+}
+
+impl PartInfo {
+    pub fn device(&self) -> String {
+        format!("/dev/{}", self.name)
+    }
+
+    /// e.g. "nvme0n1p1 — 512M (vfat)" or "sda2 — 40G (unformatted)".
+    pub fn label(&self) -> String {
+        let fs = if self.fstype.is_empty() { "unformatted".to_string() } else { self.fstype.clone() };
+        format!("{} — {} ({})", self.name, self.size, fs)
+    }
+}
+
+/// Enumerate real partitions via `lsblk`, excluding virtual devices. Empty if
+/// `lsblk` is unavailable.
+pub fn detect_partitions() -> Vec<PartInfo> {
+    let output = Command::new("lsblk")
+        .args(["-n", "-P", "-o", "NAME,SIZE,TYPE,FSTYPE"])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_pairs)
+        .filter(|d| d.type_val == "part" && !is_virtual(&d.name))
+        .map(|d| PartInfo { name: d.name, size: d.size, fstype: d.fstype })
+        .collect()
+}
+
 /// Enumerate installable whole disks via `lsblk`, excluding virtual devices
 /// (zram, loop, ram, optical). Returns an empty vec if `lsblk` is unavailable.
 pub fn detect_disks() -> Vec<DiskInfo> {
@@ -46,7 +84,7 @@ pub fn detect_disks() -> Vec<DiskInfo> {
     stdout
         .lines()
         .filter_map(parse_pairs)
-        .filter(|d| d.type_is_disk && !is_virtual(&d.name))
+        .filter(|d| d.type_val == "disk" && !is_virtual(&d.name))
         .map(|d| DiskInfo { name: d.name, size: d.size, model: d.model })
         .collect()
 }
@@ -168,15 +206,17 @@ struct Parsed {
     name: String,
     size: String,
     model: String,
-    type_is_disk: bool,
+    fstype: String,
+    type_val: String,
 }
 
-/// Parse one `lsblk -P` line: `NAME="x" SIZE="y" TYPE="disk" MODEL="z"`.
+/// Parse one `lsblk -P` line, e.g. `NAME="x" SIZE="y" TYPE="disk" MODEL="z"`.
 fn parse_pairs(line: &str) -> Option<Parsed> {
     let mut name = None;
     let mut size = String::new();
     let mut model = String::new();
-    let mut is_disk = false;
+    let mut fstype = String::new();
+    let mut type_val = String::new();
 
     for token in split_pairs(line) {
         let (key, value) = token.split_once('=')?;
@@ -184,12 +224,13 @@ fn parse_pairs(line: &str) -> Option<Parsed> {
         match key {
             "NAME" => name = Some(value),
             "SIZE" => size = value,
-            "TYPE" => is_disk = value == "disk",
+            "TYPE" => type_val = value,
             "MODEL" => model = value.trim().to_string(),
+            "FSTYPE" => fstype = value.trim().to_string(),
             _ => {}
         }
     }
-    Some(Parsed { name: name?, size, model, type_is_disk: is_disk })
+    Some(Parsed { name: name?, size, model, fstype, type_val })
 }
 
 /// Split a `-P` line into `KEY="value"` tokens, respecting quoted spaces.
@@ -227,7 +268,7 @@ mod tests {
         assert_eq!(p.name, "sda");
         assert_eq!(p.size, "500G");
         assert_eq!(p.model, "Samsung SSD 860");
-        assert!(p.type_is_disk);
+        assert_eq!(p.type_val, "disk");
     }
 
     #[test]
