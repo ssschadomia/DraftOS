@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# DraftOS live environment setup — runs once at live boot (oneshot service).
+# Creates the live user, wires passwordless sudo + greetd autologin into a
+# COSMIC session, applies the DraftOS desktop defaults (if present), and adds the
+# "Install DraftOS" launcher + autostart. Kept at runtime (not baked into the
+# squashfs passwd) so it never clobbers the users the packages create.
+set -eu
+
+LIVE_USER="draftos"
+LIVE_HOME="/home/${LIVE_USER}"
+STAMP="/var/lib/draftos-live-setup.done"
+
+# --- Live user (passwordless; it's a throwaway live session) ---
+if ! id "$LIVE_USER" &>/dev/null; then
+    useradd -m -G wheel,video,audio,network,storage,input -s /usr/bin/bash "$LIVE_USER"
+    passwd -d "$LIVE_USER"
+fi
+# Passwordless sudo for the live user (the installer needs root).
+install -Dm0440 /dev/stdin /etc/sudoers.d/00-draftos-live <<'EOF'
+%wheel ALL=(ALL:ALL) NOPASSWD: ALL
+EOF
+
+# --- greetd: autologin the live user straight into COSMIC ---
+install -Dm0644 /dev/stdin /etc/greetd/config.toml <<EOF
+[terminal]
+vt = 1
+
+# Live boot: log the live user directly into a COSMIC session (no password).
+[initial_session]
+command = "cosmic-session"
+user = "${LIVE_USER}"
+
+# Fallback / subsequent: the COSMIC greeter.
+[default_session]
+command = "cosmic-greeter"
+user = "cosmic-greeter"
+EOF
+
+# --- DraftOS desktop defaults for the live user, if the ISO carries them ---
+if [ -d /usr/share/cosmic ]; then
+    install -d -o "$LIVE_USER" -g "$LIVE_USER" "${LIVE_HOME}/.config"
+    cp -a /usr/share/cosmic "${LIVE_HOME}/.config/cosmic"
+    chown -R "$LIVE_USER:$LIVE_USER" "${LIVE_HOME}/.config/cosmic"
+fi
+
+# --- "Install DraftOS" launcher + autostart on the live desktop ---
+install -d -o "$LIVE_USER" -g "$LIVE_USER" \
+    "${LIVE_HOME}/.local/share/applications" \
+    "${LIVE_HOME}/.config/autostart" \
+    "${LIVE_HOME}/Desktop"
+cat > /tmp/draftos-install.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Install DraftOS
+Comment=Install DraftOS onto this computer
+Exec=draftos-installer
+Icon=org.draftos.Installer
+Terminal=false
+Categories=System;
+EOF
+for dest in \
+    "${LIVE_HOME}/.local/share/applications/draftos-install.desktop" \
+    "${LIVE_HOME}/Desktop/draftos-install.desktop" \
+    "${LIVE_HOME}/.config/autostart/draftos-install.desktop"; do
+    install -Dm0755 -o "$LIVE_USER" -g "$LIVE_USER" /tmp/draftos-install.desktop "$dest"
+done
+rm -f /tmp/draftos-install.desktop
+
+touch "$STAMP"

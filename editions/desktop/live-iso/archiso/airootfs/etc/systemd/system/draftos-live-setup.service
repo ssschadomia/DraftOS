@@ -1,0 +1,15 @@
+[Unit]
+Description=DraftOS live environment setup (user, autologin, desktop defaults)
+Documentation=https://github.com/ssschadomia/DraftOS
+# Must complete before the display manager brings up the greeter/session.
+Before=greetd.service display-manager.service
+After=systemd-user-sessions.service
+ConditionPathExists=!/var/lib/draftos-live-setup.done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/draftos-live-setup
+
+[Install]
+WantedBy=multi-user.target

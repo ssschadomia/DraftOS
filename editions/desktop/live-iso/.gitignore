@@ -1,0 +1,9 @@
+# archiso build output & scratch
+/work/
+/out/
+# binaries staged in at build time
+/archiso/airootfs/usr/bin/draftos-installer
+/archiso/airootfs/usr/bin/draftos-install
+# desktop defaults staged in at build time (if used)
+/archiso/airootfs/usr/share/cosmic/
+/archiso/airootfs/usr/share/backgrounds/

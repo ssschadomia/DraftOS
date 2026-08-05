@@ -1,0 +1,9 @@
+// DraftOS live medium only: let the (passwordless) live user launch the
+// installer/engine via pkexec without an auth prompt. This ships ONLY on the
+// ISO's airootfs — it is never part of an installed DraftOS system.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.policykit.exec" &&
+        subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});

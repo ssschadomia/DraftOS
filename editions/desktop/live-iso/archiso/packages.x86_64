@@ -1,0 +1,75 @@
+# Packages for the DraftOS Desktop live ISO.
+# = archiso live essentials + install tooling (what the engine calls at runtime)
+#   + a full COSMIC desktop (so the live medium boots into the DraftOS look)
+#   + fonts. No arkdep: the Desktop edition installs a normal Arch base.
+
+## --- Live system essentials (from archiso releng) ---
+base
+linux
+linux-firmware
+amd-ucode
+intel-ucode
+mkinitcpio
+mkinitcpio-archiso
+mkinitcpio-nfs-utils
+archiso
+syslinux
+edk2-shell
+memtest86+-efi
+squashfs-tools
+dhcpcd
+iwd
+networkmanager
+wireless-regdb
+sudo
+polkit
+bash-completion
+nano
+vim
+less
+git
+rsync
+wget
+curl
+zstd
+usbutils
+pciutils
+
+## --- Install tooling (the draftos-install engine shells out to these) ---
+arch-install-scripts
+gptfdisk
+parted
+dosfstools
+e2fsprogs
+exfatprogs
+f2fs-tools
+btrfs-progs
+cryptsetup
+nvme-cli
+efibootmgr
+libpwquality
+
+## --- COSMIC desktop (live medium boots into the DraftOS look) ---
+cosmic-session
+cosmic-greeter
+greetd
+xdg-desktop-portal-cosmic
+cosmic-wallpapers
+cosmic-store
+cosmic-terminal
+cosmic-text-editor
+cosmic-files
+
+## --- Graphics / firmware for a broad range of live hardware ---
+mesa
+vulkan-intel
+vulkan-radeon
+vulkan-icd-loader
+xorg-xwayland
+
+## --- Fonts / theming so the live desktop and installer render well ---
+noto-fonts
+noto-fonts-emoji
+ttf-dejavu
+inter-font
+ttf-jetbrains-mono
