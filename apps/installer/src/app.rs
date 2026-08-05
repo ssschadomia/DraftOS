@@ -85,8 +85,14 @@ pub struct Installer {
     password_confirm: String,
     /// Root password re-entry, UI-only, used when root has a separate password.
     root_confirm: String,
-    /// Install progress, 0.0..=1.0. Simulated until the engine reports real work.
+    /// Install progress, 0.0..=1.0.
     install_progress: f32,
+    /// The engine's plan for the current install, as (phase label, step title).
+    plan_steps: Vec<(String, String)>,
+    /// Index of the step currently shown on the Install screen.
+    install_step: usize,
+    /// Set when the Summary → Install transition can't build a valid request.
+    summary_error: Option<String>,
 }
 
 impl cosmic::Application for Installer {
@@ -157,7 +163,7 @@ impl cosmic::Application for Installer {
             config.timezone = Some(timezones[i].clone());
         }
 
-        let installer = Installer {
+        let mut installer = Installer {
             core,
             step,
             config,
@@ -177,7 +183,20 @@ impl cosmic::Application for Installer {
             password_confirm: String::new(),
             root_confirm: String::new(),
             install_progress: 0.0,
+            plan_steps: Vec::new(),
+            install_step: 0,
+            summary_error: None,
         };
+        // Dev preview: when jumping straight to the Install step, populate a demo
+        // plan so the screen renders (normally the plan is built at Summary→Install).
+        if Step::ALL[installer.step] == Step::Install {
+            installer.plan_steps = demo_plan();
+            if !installer.plan_steps.is_empty() {
+                installer.install_step = installer.plan_steps.len() / 3;
+                installer.install_progress =
+                    installer.install_step as f32 / installer.plan_steps.len() as f32;
+            }
+        }
         (installer, cosmic::app::Task::none())
     }
 
@@ -186,18 +205,28 @@ impl cosmic::Application for Installer {
         match message {
             Message::Next => {
                 if self.can_advance() {
-                    self.step = (self.step + 1).min(last);
-                    if Step::ALL[self.step] == Step::Install {
-                        self.install_progress = 0.0;
+                    if Step::ALL[self.step] == Step::Summary {
+                        // Build the engine plan before entering Install; block on error.
+                        match self.build_plan() {
+                            Ok(()) => self.step = (self.step + 1).min(last),
+                            Err(e) => self.summary_error = Some(e),
+                        }
+                    } else {
+                        self.step = (self.step + 1).min(last);
                     }
                 }
             }
             Message::Back => self.step = self.step.saturating_sub(1),
             Message::Tick => {
-                if Step::ALL[self.step] == Step::Install {
-                    self.install_progress = (self.install_progress + 0.012).min(1.0);
-                    if self.install_progress >= 1.0 {
-                        self.step = (self.step + 1).min(last);
+                if Step::ALL[self.step] == Step::Install && !self.plan_steps.is_empty() {
+                    if self.install_step + 1 >= self.plan_steps.len() {
+                        self.install_step = self.plan_steps.len() - 1;
+                        self.install_progress = 1.0;
+                        self.step = (self.step + 1).min(last); // → Done
+                    } else {
+                        self.install_step += 1;
+                        self.install_progress =
+                            self.install_step as f32 / self.plan_steps.len() as f32;
                     }
                 }
             }
@@ -342,6 +371,20 @@ impl Installer {
         }
     }
 
+    /// Build the engine plan from the collected config, ready for the Install step.
+    fn build_plan(&mut self) -> Result<(), String> {
+        let request = self.config.to_request()?;
+        let steps = draftos_install::plan(&request).map_err(|e| e.to_string())?;
+        self.plan_steps = steps
+            .iter()
+            .map(|s| (s.phase.label().to_string(), s.title.clone()))
+            .collect();
+        self.install_step = 0;
+        self.install_progress = 0.0;
+        self.summary_error = None;
+        Ok(())
+    }
+
     /// The account step is satisfiable when a username and a matching, non-empty
     /// password are present — and, if root has its own password, that it matches too.
     fn account_ok(&self) -> bool {
@@ -381,55 +424,36 @@ impl Installer {
             .into()
     }
 
-    /// Install progress: a rotating highlight, the current phase, and a bar.
+    /// Install progress: the real engine plan step being applied, and a bar.
     fn install_view(&self) -> Element<'_, Message> {
-        const TIPS: [(&str, &str, &str); 4] = [
-            ("video-display-symbolic", "A desktop with depth", "COSMIC with real glass, tuned to stay out of your way."),
-            ("system-software-install-symbolic", "Curated apps", "A store, control center and companion tools that feel like one system."),
-            ("utilities-system-monitor-symbolic", "Tuned for speed", "A performance-first Arch base with the CachyOS kernel."),
-            ("security-high-symbolic", "Open and yours", "The polish of a curated OS with the freedom of Linux underneath."),
-        ];
-        let idx = ((self.install_progress * TIPS.len() as f32) as usize).min(TIPS.len() - 1);
-        let (icon, title, detail) = TIPS[idx];
-
-        let highlight = widget::column::with_capacity(3)
-            .spacing(12)
-            .width(Length::Fill)
-            .align_x(Alignment::Center)
-            .push(widget::icon::from_name(icon).size(72).icon())
-            .push(widget::text::title3(title))
-            .push(widget::text::body(detail).center());
-
+        let total = self.plan_steps.len();
+        let (phase, title) = self
+            .plan_steps
+            .get(self.install_step)
+            .cloned()
+            .unwrap_or_else(|| ("Preparing".to_string(), String::new()));
         let pct = (self.install_progress * 100.0).round() as u32;
 
         widget::column::with_capacity(6)
-            .spacing(20)
+            .spacing(16)
             .width(Length::Fill)
             .align_x(Alignment::Center)
             .push(widget::text::title1("Installing DraftOS"))
-            .push(highlight)
             .push(widget::Space::new().height(Length::Fixed(8.0)))
-            .push(widget::text::body(self.install_phase()))
+            .push(widget::text::heading(phase))
+            .push(widget::text::body(title).center())
+            .push(widget::Space::new().height(Length::Fixed(8.0)))
             .push(
                 widget::container(
                     widget::determinate_linear(self.install_progress).width(Length::Fixed(360.0)),
                 )
                 .center_x(Length::Fill),
             )
-            .push(widget::text::caption(format!("{pct}%")))
+            .push(widget::text::caption(format!(
+                "{pct}%  ·  step {} of {total}",
+                (self.install_step + 1).min(total.max(1))
+            )))
             .into()
-    }
-
-    /// Human label for the current install phase, derived from progress.
-    fn install_phase(&self) -> &'static str {
-        match (self.install_progress * 6.0) as usize {
-            0 => "Preparing the disk…",
-            1 => "Creating partitions…",
-            2 => "Installing the base system…",
-            3 => "Installing the COSMIC desktop…",
-            4 => "Configuring your system…",
-            _ => "Finishing up…",
-        }
     }
 
     /// Success screen shown when the install completes.
@@ -934,11 +958,16 @@ impl Installer {
             .push(widget::settings::item("Computer name", widget::text::body(host.to_string())))
             .push(row("Administrator", admin));
 
-        widget::container(rows)
+        let card = widget::container(rows)
             .padding(16)
             .width(Length::Fill)
-            .class(cosmic::theme::Container::Card)
-            .into()
+            .class(cosmic::theme::Container::Card);
+
+        let mut col = widget::column::with_capacity(2).spacing(8).push(card);
+        if let Some(err) = &self.summary_error {
+            col = col.push(widget::text::caption(format!("Cannot start install: {err}")));
+        }
+        col.into()
     }
 
     /// Bottom navigation: Back · step counter · Continue/Install/Restart.
@@ -992,6 +1021,35 @@ struct ListSpec {
     display: fn(&str) -> String,
     on_select: fn(usize) -> Message,
     on_search: fn(String) -> Message,
+}
+
+/// A demo engine plan used only to preview the Install screen during development.
+fn demo_plan() -> Vec<(String, String)> {
+    use draftos_install::config as eng;
+    let req = eng::InstallRequest {
+        locale: "en_US.UTF-8".into(),
+        keymap: "us".into(),
+        x11_layouts: vec!["us".into()],
+        timezone: "Europe/Moscow".into(),
+        hostname: "draftos".into(),
+        target: eng::Target::WholeDisk { device: "/dev/sda".into() },
+        luks_passphrase: None,
+        account: eng::Account {
+            username: "user".into(),
+            full_name: "User".into(),
+            password: eng::Secret("x".into()),
+        },
+        root: eng::RootPolicy::SameAsUser,
+        kernel: eng::Kernel::Standard,
+    };
+    draftos_install::plan(&req)
+        .map(|steps| {
+            steps
+                .iter()
+                .map(|s| (s.phase.label().to_string(), s.title.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A neutral placeholder for steps whose screens are not built yet.

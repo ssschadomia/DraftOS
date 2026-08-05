@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 draftos-common.workspace = true
+draftos-install.workspace = true
 libcosmic = { workspace = true, features = [
     "winit",
     "tokio",
