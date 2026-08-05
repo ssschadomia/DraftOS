@@ -1,0 +1,21 @@
+# Optional Worker that serves the DraftOS R2 bucket with directory indexes,
+# range support and tuned caching. A plain public bucket also works — deploy this
+# only if you want the nicer serving behavior. See R2.md.
+
+name = "draftos-cdn"
+main = "worker/index.js"
+compatibility_date = "2024-11-01"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "draftos-cdn"
+# preview_bucket_name = "draftos-cdn-dev"
+
+# Serve on a custom domain (create/route the domain in the Cloudflare dashboard
+# first, then uncomment):
+# [[routes]]
+# pattern = "cdn.draftos.org"
+# custom_domain = true
+
+[vars]
+SITE_NAME = "DraftOS CDN"

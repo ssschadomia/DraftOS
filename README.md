@@ -32,6 +32,18 @@ docs/         architecture + decision records
 
 All Rust code lives in a single Cargo workspace rooted at [Cargo.toml](Cargo.toml).
 
+## Downloads & hosting
+
+Release builds are published as **GitHub Release assets** and mirrored to
+**Cloudflare R2** (CDN, no egress fees). The package and Flatpak repositories are
+served from the same bucket — see [infra/](infra/) for the layout and setup.
+
+## Contributing & community
+
+Contributions are welcome! Start with [CONTRIBUTING.md](CONTRIBUTING.md), and note
+the [Code of Conduct](CODE_OF_CONDUCT.md). Found a vulnerability? Please follow
+[SECURITY.md](SECURITY.md) rather than opening a public issue.
+
 ## License
 
 DraftOS's own code is **GPL-3.0-or-later** ([LICENSE](LICENSE)). Upstream

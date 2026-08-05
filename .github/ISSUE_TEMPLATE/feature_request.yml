@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an idea or improvement for DraftOS
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the need or frustration behind the request.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like DraftOS to do?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Installer
+        - Desktop / COSMIC
+        - First-party apps (store, welcome, control, companion)
+        - CLI (draftos, draftbox)
+        - Build / editions
+        - Other

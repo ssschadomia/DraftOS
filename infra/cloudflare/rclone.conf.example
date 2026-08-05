@@ -1,0 +1,14 @@
+# rclone remote for Cloudflare R2 (S3-compatible API).
+#
+# Copy to ~/.config/rclone/rclone.conf (or point RCLONE_CONFIG at this file) and
+# fill in the placeholders from your R2 API token. Never commit real credentials.
+
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = <R2_ACCESS_KEY_ID>
+secret_access_key = <R2_SECRET_ACCESS_KEY>
+endpoint = https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+# R2 has no regions; "auto" keeps the S3 client happy.
+region = auto
+acl = private

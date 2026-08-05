@@ -33,6 +33,7 @@ Decisions with lasting consequences are recorded as ADRs under
 | `editions/immutable/` | arkdep image recipe + live ISO (Bazzite-style) | — |
 | `editions/desktop/` | archiso + CachyOS repos (CachyOS-style) | — |
 | `build/` | build scripts, `Containerfile`s, staging logic, `ci/` | — |
+| `infra/` | hosting & deployment (Cloudflare R2/Pages, upload scripts, CDN Worker) | — |
 | `docs/` | this file + `decisions/` (ADRs) | — |
 
 ## Build model (target shape)
