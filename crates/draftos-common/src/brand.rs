@@ -17,7 +17,7 @@ pub const PRETTY_NAME: &str = "DraftOS";
 pub const APP_ID_PREFIX: &str = "org.draftos";
 
 /// Project home / source URL.
-pub const HOME_URL: &str = "https://github.com/schadomia/DraftOS";
+pub const HOME_URL: &str = "https://github.com/ssschadomia/DraftOS";
 
 /// Crate version, taken from Cargo at build time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

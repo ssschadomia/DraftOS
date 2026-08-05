@@ -21,7 +21,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/schadomia/DraftOS"
+repository = "https://github.com/ssschadomia/DraftOS"
 authors = ["DraftOS contributors"]
 
 # Dependencies shared across members are pinned here once and referenced with
