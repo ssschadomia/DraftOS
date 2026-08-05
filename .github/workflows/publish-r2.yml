@@ -65,5 +65,10 @@ jobs:
             SRC="${{ github.event.inputs.source_dir }}"; PREFIX="${{ github.event.inputs.prefix }}"
           fi
           echo ">> uploading $SRC -> r2:$BUCKET/$PREFIX"
-          rclone copy "$SRC" "r2:${BUCKET}/${PREFIX}" \
+          # 'sync' (not copy) mirrors the prefix, so old releases don't accumulate
+          # — this keeps storage bounded to the latest artifacts, staying in the
+          # 10 GB free tier (egress on R2 is always free).
+          rclone sync "$SRC" "r2:${BUCKET}/${PREFIX}" \
             --s3-no-check-bucket --transfers 8 --checkers 16 --s3-chunk-size 64M
+          echo ">> bucket total after upload:"
+          rclone size "r2:${BUCKET}" || true
