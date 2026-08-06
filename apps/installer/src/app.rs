@@ -121,7 +121,8 @@ impl cosmic::Application for Installer {
         // Detect locales and preselect the system's current one.
         let locales = system::detect_locales();
         let selected_locale = system::current_locale()
-            .and_then(|l| locales.iter().position(|x| *x == l));
+            .and_then(|l| locales.iter().position(|x| *x == l))
+            .or_else(|| locales.iter().position(|x| x == "en_US.UTF-8"));
         if let Some(i) = selected_locale {
             config.locale = Some(locales[i].clone());
         }

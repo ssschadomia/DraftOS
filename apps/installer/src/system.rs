@@ -89,9 +89,33 @@ pub fn detect_disks() -> Vec<DiskInfo> {
         .collect()
 }
 
-/// All UTF-8 locales the system knows, via `localectl list-locales` (excluding
-/// the `C`/`POSIX` pseudo-locales). Empty if the command is unavailable.
+/// All installable UTF-8 locales.
+///
+/// Prefers glibc's canonical `/usr/share/i18n/SUPPORTED` — the full list of
+/// locales you can *install* (~340). `localectl list-locales` only reports
+/// already-generated locales, which on a fresh live system is often just
+/// `C.UTF-8`, so it's used only as a fallback.
 pub fn detect_locales() -> Vec<String> {
+    if let Ok(content) = std::fs::read_to_string("/usr/share/i18n/SUPPORTED") {
+        let list: Vec<String> = content
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                // Lines are "<locale> <charmap>", e.g. "en_US.UTF-8 UTF-8".
+                let mut parts = line.split_whitespace();
+                let name = parts.next()?;
+                let charmap = parts.next().unwrap_or("");
+                (charmap == "UTF-8" && !name.starts_with("C.") && !name.starts_with("POSIX"))
+                    .then(|| name.to_string())
+            })
+            .collect();
+        if !list.is_empty() {
+            return list;
+        }
+    }
     Command::new("localectl")
         .arg("list-locales")
         .output()

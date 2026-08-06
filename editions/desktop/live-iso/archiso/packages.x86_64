@@ -66,6 +66,7 @@ vulkan-intel
 vulkan-radeon
 vulkan-icd-loader
 xorg-xwayland
+xkeyboard-config
 
 ## --- Fonts / theming so the live desktop and installer render well ---
 noto-fonts
