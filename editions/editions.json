@@ -1,0 +1,27 @@
+{
+  "$comment": "DraftOS editions manifest — consumed by the Media Writer to list downloadable editions. Update version/url/size/sha256 when a release is published.",
+  "editions": [
+    {
+      "id": "desktop",
+      "name": "Desktop",
+      "description": "Classic desktops and laptops. Mutable Arch base, CachyOS-tuned, COSMIC.",
+      "arch": "x86_64",
+      "version": "2026.08.06",
+      "available": true,
+      "url": "https://github.com/ssschadomia/DraftOS/releases/download/v2026.08.06/draftos-desktop-2026.08.06-x86_64.iso",
+      "size": 1990000000,
+      "sha256": ""
+    },
+    {
+      "id": "immutable",
+      "name": "Immutable",
+      "description": "Atomic A/B system (Bazzite / SteamOS style). Coming soon.",
+      "arch": "x86_64",
+      "version": "",
+      "available": false,
+      "url": "",
+      "size": 0,
+      "sha256": ""
+    }
+  ]
+}

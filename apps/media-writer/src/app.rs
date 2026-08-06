@@ -1,4 +1,5 @@
-//! DraftOS Media Writer — write a DraftOS ISO to a USB drive.
+//! DraftOS Media Writer — download an edition (or use a local ISO) and write it
+//! to a USB drive.
 
 use std::time::Duration;
 
@@ -6,23 +7,60 @@ use cosmic::iced::{Alignment, Length, Padding, Subscription};
 use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::{executor, Core};
+use serde::Deserialize;
 
 use crate::system::{self, DriveInfo};
 
-/// Steps of the writer flow.
+/// Where the editions list is fetched from (repo-controlled, always available).
+const MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/ssschadomia/DraftOS/main/editions/editions.json";
+
+/// One downloadable DraftOS edition, from the manifest.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Edition {
+    id: String,
+    name: String,
+    description: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    available: bool,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct Manifest {
+    editions: Vec<Edition>,
+}
+
+/// How the user is providing the image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceMode {
+    Download,
+    Local,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
     Source,
+    Edition,
+    Download,
+    LocalIso,
     Drive,
     Writing,
     Done,
 }
 
 impl Step {
-    const ALL: [Step; 4] = [Step::Source, Step::Drive, Step::Writing, Step::Done];
     fn title(self) -> &'static str {
         match self {
             Step::Source => "Create install media",
+            Step::Edition => "Choose an edition",
+            Step::Download => "Downloading DraftOS",
+            Step::LocalIso => "Choose an ISO",
             Step::Drive => "Select a USB drive",
             Step::Writing => "Writing DraftOS",
             Step::Done => "Ready",
@@ -30,7 +68,10 @@ impl Step {
     }
     fn subtitle(self) -> &'static str {
         match self {
-            Step::Source => "Choose the DraftOS ISO to write.",
+            Step::Source => "Download DraftOS, or use an ISO you already have.",
+            Step::Edition => "Pick the edition to download.",
+            Step::Download => "Fetching the image — this can take a while.",
+            Step::LocalIso => "Point to the DraftOS ISO on this computer.",
             Step::Drive => "Pick the drive to write it to. It will be erased.",
             Step::Writing => "Writing the image — don't remove the drive.",
             Step::Done => "The drive is ready to boot from.",
@@ -43,6 +84,11 @@ pub enum Message {
     Next,
     Back,
     Close,
+    SetMode(SourceMode),
+    ManifestLoaded(Result<Vec<Edition>, String>),
+    RetryManifest,
+    SelectEdition(usize),
+    DownloadFinished(Result<String, String>),
     ChooseIso,
     IsoChosen(Option<String>),
     SetIsoPath(String),
@@ -54,8 +100,14 @@ pub enum Message {
 
 pub struct MediaWriter {
     core: Core,
-    step: usize,
+    step: Step,
+    mode: SourceMode,
+    editions: Vec<Edition>,
+    editions_loading: bool,
+    selected_edition: Option<usize>,
     iso_path: String,
+    download_path: String,
+    download_total: u64,
     drives: Vec<DriveInfo>,
     selected_drive: Option<usize>,
     progress: f32,
@@ -76,49 +128,80 @@ impl cosmic::Application for MediaWriter {
     }
 
     fn init(core: Core, _flags: ()) -> (Self, cosmic::app::Task<Message>) {
-        // Dev hook: DRAFTOS_WRITER_STEP=<n> opens on a given step for previews.
-        let step = std::env::var("DRAFTOS_WRITER_STEP")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|&i| i < Step::ALL.len())
-            .unwrap_or(0);
-        let app = MediaWriter {
+        let mut app = MediaWriter {
             core,
-            step,
+            step: Step::Source,
+            mode: SourceMode::Download,
+            editions: Vec::new(),
+            editions_loading: false,
+            selected_edition: None,
             iso_path: String::new(),
-            drives: system::detect_removable_drives(),
+            download_path: String::new(),
+            download_total: 0,
+            drives: Vec::new(),
             selected_drive: None,
             progress: 0.0,
             error: None,
         };
+        // Dev hook: preview the edition picker without navigating/fetching.
+        if std::env::var("DRAFTOS_WRITER_PREVIEW").as_deref() == Ok("edition") {
+            app.step = Step::Edition;
+            app.editions = vec![
+                Edition {
+                    id: "desktop".into(),
+                    name: "Desktop".into(),
+                    description: "Classic desktops and laptops. CachyOS-tuned COSMIC".into(),
+                    version: "2026.08.06".into(),
+                    available: true,
+                    url: "x".into(),
+                    size: 1_990_000_000,
+                },
+                Edition {
+                    id: "immutable".into(),
+                    name: "Immutable".into(),
+                    description: "Atomic A/B system (Bazzite / SteamOS style)".into(),
+                    version: String::new(),
+                    available: false,
+                    url: String::new(),
+                    size: 0,
+                },
+            ];
+        }
         (app, cosmic::app::Task::none())
     }
 
     fn update(&mut self, message: Message) -> cosmic::app::Task<Message> {
-        let last = Step::ALL.len() - 1;
         match message {
-            Message::Next => {
-                if self.can_advance() {
-                    let from = Step::ALL[self.step];
-                    self.step = (self.step + 1).min(last);
-                    match from {
-                        // Refresh the drive list when arriving at the Drive step.
-                        Step::Source => self.drives = system::detect_removable_drives(),
-                        // Kick off the real write when leaving the Drive step.
-                        Step::Drive => {
-                            self.progress = 0.0;
-                            self.error = None;
-                            let iso = self.iso_path.clone();
-                            let dev = self.drives[self.selected_drive.unwrap()].device();
-                            return cosmic::task::future(async move {
-                                Message::WriteFinished(write_iso(iso, dev).await)
-                            });
-                        }
-                        _ => {}
-                    }
+            Message::Next => return self.advance(),
+            Message::Back => self.go_back(),
+            Message::SetMode(m) => self.mode = m,
+            Message::RetryManifest => {
+                self.editions_loading = true;
+                self.error = None;
+                return cosmic::task::future(async {
+                    Message::ManifestLoaded(load_manifest(MANIFEST_URL.into()).await)
+                });
+            }
+            Message::ManifestLoaded(result) => {
+                self.editions_loading = false;
+                match result {
+                    Ok(list) => self.editions = list,
+                    Err(e) => self.error = Some(e),
                 }
             }
-            Message::Back => self.step = self.step.saturating_sub(1),
+            Message::SelectEdition(i) => self.selected_edition = Some(i),
+            Message::DownloadFinished(result) => match result {
+                Ok(path) => {
+                    self.iso_path = path;
+                    self.progress = 1.0;
+                    self.step = Step::Drive;
+                    self.drives = system::detect_removable_drives();
+                }
+                Err(e) => {
+                    self.error = Some(e);
+                    self.step = Step::Edition;
+                }
+            },
             Message::ChooseIso => {
                 return cosmic::task::future(async move {
                     use cosmic::dialog::file_chooser::{self, FileFilter};
@@ -144,20 +227,26 @@ impl cosmic::Application for MediaWriter {
                 self.selected_drive = None;
             }
             Message::SelectDrive(i) => self.selected_drive = Some(i),
-            Message::Tick => {
-                if Step::ALL[self.step] == Step::Writing {
-                    self.progress = (self.progress + 0.02).min(0.95);
+            Message::Tick => match self.step {
+                Step::Download => {
+                    if self.download_total > 0 {
+                        let got = std::fs::metadata(&self.download_path)
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        self.progress = (got as f32 / self.download_total as f32).min(0.99);
+                    }
                 }
-            }
+                Step::Writing => self.progress = (self.progress + 0.02).min(0.95),
+                _ => {}
+            },
             Message::WriteFinished(result) => match result {
                 Ok(()) => {
                     self.progress = 1.0;
-                    self.step = (self.step + 1).min(last); // Writing → Done
+                    self.step = Step::Done;
                 }
                 Err(e) => {
                     self.error = Some(e);
-                    // Back to the Drive step so the user can retry.
-                    self.step = Step::ALL.iter().position(|s| *s == Step::Drive).unwrap_or(0);
+                    self.step = Step::Drive;
                 }
             },
             Message::Close => {
@@ -170,12 +259,15 @@ impl cosmic::Application for MediaWriter {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let step = Step::ALL[self.step];
-        let (inner, centered): (Element<'_, Message>, bool) = match step {
-            Step::Source => (self.source_view(), false),
-            Step::Drive => (self.drive_view(), false),
-            Step::Writing => (self.writing_view(), true),
-            Step::Done => (self.done_view(), true),
+        let centered = matches!(self.step, Step::Download | Step::Writing | Step::Done);
+        let inner = match self.step {
+            Step::Source => self.source_view(),
+            Step::Edition => self.edition_view(),
+            Step::Download => self.progress_view("Downloading DraftOS", "downloading the image"),
+            Step::LocalIso => self.local_iso_view(),
+            Step::Drive => self.drive_view(),
+            Step::Writing => self.progress_view("Writing DraftOS", "writing to the drive"),
+            Step::Done => self.done_view(),
         };
 
         let framed = widget::container(widget::container(inner).width(Length::Fixed(560.0)))
@@ -205,7 +297,9 @@ impl cosmic::Application for MediaWriter {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if Step::ALL[self.step] == Step::Writing && self.progress < 0.95 {
+        let active = (self.step == Step::Download && self.progress < 0.99)
+            || (self.step == Step::Writing && self.progress < 0.95);
+        if active {
             cosmic::iced::time::every(Duration::from_millis(300)).map(|_| Message::Tick)
         } else {
             Subscription::none()
@@ -219,23 +313,179 @@ impl MediaWriter {
         !p.is_empty() && p.ends_with(".iso") && std::path::Path::new(p).is_file()
     }
 
+    fn selected_edition_ok(&self) -> bool {
+        self.selected_edition
+            .and_then(|i| self.editions.get(i))
+            .is_some_and(|e| e.available && !e.url.is_empty())
+    }
+
     fn can_advance(&self) -> bool {
-        match Step::ALL[self.step] {
-            Step::Source => self.iso_ok(),
+        match self.step {
+            Step::Source => true,
+            Step::Edition => self.selected_edition_ok(),
+            Step::LocalIso => self.iso_ok(),
             Step::Drive => self.selected_drive.is_some(),
-            _ => true,
+            _ => false,
         }
     }
 
-    fn header(&self, step: Step) -> Element<'_, Message> {
+    /// Advance to the next step, kicking off any async work (fetch/download/write).
+    fn advance(&mut self) -> cosmic::app::Task<Message> {
+        if !self.can_advance() {
+            return cosmic::app::Task::none();
+        }
+        match self.step {
+            Step::Source => match self.mode {
+                SourceMode::Local => self.step = Step::LocalIso,
+                SourceMode::Download => {
+                    self.step = Step::Edition;
+                    if self.editions.is_empty() && !self.editions_loading {
+                        self.editions_loading = true;
+                        self.error = None;
+                        return cosmic::task::future(async {
+                            Message::ManifestLoaded(load_manifest(MANIFEST_URL.into()).await)
+                        });
+                    }
+                }
+            },
+            Step::Edition => {
+                if let Some(ed) =
+                    self.selected_edition.and_then(|i| self.editions.get(i)).cloned()
+                {
+                    self.step = Step::Download;
+                    self.progress = 0.0;
+                    self.error = None;
+                    self.download_total = ed.size;
+                    let dest = std::env::temp_dir()
+                        .join(format!("draftos-{}-{}.iso", ed.id, ed.version))
+                        .display()
+                        .to_string();
+                    self.download_path = dest.clone();
+                    return cosmic::task::future(async move {
+                        Message::DownloadFinished(download_iso(ed.url, dest).await)
+                    });
+                }
+            }
+            Step::LocalIso => {
+                self.step = Step::Drive;
+                self.drives = system::detect_removable_drives();
+            }
+            Step::Drive => {
+                self.step = Step::Writing;
+                self.progress = 0.0;
+                self.error = None;
+                let iso = self.iso_path.clone();
+                let dev = self.drives[self.selected_drive.unwrap()].device();
+                return cosmic::task::future(async move {
+                    Message::WriteFinished(write_iso(iso, dev).await)
+                });
+            }
+            _ => {}
+        }
+        cosmic::app::Task::none()
+    }
+
+    fn go_back(&mut self) {
+        self.step = match self.step {
+            Step::Edition | Step::LocalIso => Step::Source,
+            Step::Drive => {
+                if self.mode == SourceMode::Local {
+                    Step::LocalIso
+                } else {
+                    Step::Edition
+                }
+            }
+            other => other,
+        };
+    }
+
+    fn header(&self) -> Element<'_, Message> {
         widget::column::with_capacity(2)
             .spacing(4)
-            .push(widget::text::title2(step.title()))
-            .push(widget::text::body(step.subtitle()))
+            .push(widget::text::title2(self.step.title()))
+            .push(widget::text::body(self.step.subtitle()))
             .into()
     }
 
     fn source_view(&self) -> Element<'_, Message> {
+        let option = |title: &'static str, detail: &'static str, value: SourceMode, selected| {
+            let label = widget::column::with_capacity(2)
+                .spacing(2)
+                .push(widget::text::heading(title))
+                .push(widget::text::caption(detail));
+            widget::container(
+                widget::radio(label, value, selected, Message::SetMode).width(Length::Fill),
+            )
+            .padding(16)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card)
+        };
+        let sel = Some(self.mode);
+        widget::column::with_capacity(3)
+            .spacing(12)
+            .push(self.header())
+            .push(option(
+                "Download DraftOS",
+                "Fetch the latest edition and write it — no ISO needed.",
+                SourceMode::Download,
+                sel,
+            ))
+            .push(option(
+                "Use a local ISO",
+                "Write a DraftOS .iso you already have.",
+                SourceMode::Local,
+                sel,
+            ))
+            .into()
+    }
+
+    fn edition_view(&self) -> Element<'_, Message> {
+        let content: Element<'_, Message> = if self.editions_loading {
+            card(widget::text::body("Loading editions…").into())
+        } else if self.editions.is_empty() {
+            let msg = self.error.clone().unwrap_or_else(|| "No editions available.".into());
+            widget::column::with_capacity(2)
+                .spacing(8)
+                .push(card(widget::text::caption(msg).into()))
+                .push(widget::button::standard("Retry").on_press(Message::RetryManifest))
+                .into()
+        } else {
+            let mut col = widget::column::with_capacity(self.editions.len()).spacing(4);
+            for (i, ed) in self.editions.iter().enumerate() {
+                let title = if ed.version.is_empty() {
+                    ed.name.clone()
+                } else {
+                    format!("{} {}", ed.name, ed.version)
+                };
+                let detail = if ed.available && ed.size > 0 {
+                    format!("{}  ·  {}", ed.description, human(ed.size))
+                } else {
+                    format!("{}  ·  coming soon", ed.description)
+                };
+                let lines = widget::column::with_capacity(2)
+                    .spacing(1)
+                    .push(widget::text::body(title))
+                    .push(widget::text::caption(detail));
+                // Only available editions are selectable; others are shown greyed out.
+                let row: Element<'_, Message> = if ed.available {
+                    widget::radio(lines, i, self.selected_edition, Message::SelectEdition)
+                        .width(Length::Fill)
+                        .into()
+                } else {
+                    widget::container(lines).padding([2, 8]).width(Length::Fill).into()
+                };
+                col = col.push(row);
+            }
+            card(col.into())
+        };
+        widget::column::with_capacity(2)
+            .spacing(12)
+            .push(self.header())
+            .push(content)
+            .into()
+    }
+
+    fn local_iso_view(&self) -> Element<'_, Message> {
         let picker = widget::row::with_capacity(2)
             .spacing(8)
             .align_y(Alignment::Center)
@@ -245,7 +495,6 @@ impl MediaWriter {
                     .width(Length::Fill),
             )
             .push(widget::button::standard("Choose…").on_press(Message::ChooseIso));
-
         let note = if self.iso_path.trim().is_empty() {
             widget::text::caption("Pick the DraftOS .iso you downloaded or built.")
         } else if self.iso_ok() {
@@ -256,31 +505,24 @@ impl MediaWriter {
         } else {
             widget::text::caption("File not found, or it isn't an .iso.")
         };
-
-        widget::column::with_capacity(3)
-            .spacing(24)
-            .push(self.header(Step::Source))
-            .push(
-                widget::container(widget::column::with_capacity(2).spacing(8).push(picker).push(note))
-                    .padding(16)
-                    .width(Length::Fill)
-                    .class(cosmic::theme::Container::Card),
-            )
+        widget::column::with_capacity(2)
+            .spacing(12)
+            .push(self.header())
+            .push(card(widget::column::with_capacity(2)
+                .spacing(8)
+                .push(picker)
+                .push(note)
+                .into()))
             .into()
     }
 
     fn drive_view(&self) -> Element<'_, Message> {
         let content: Element<'_, Message> = if self.drives.is_empty() {
-            widget::container(
-                widget::column::with_capacity(2)
-                    .spacing(6)
-                    .push(widget::text::heading("No removable drives found"))
-                    .push(widget::text::caption("Insert a USB drive, then press Rescan.")),
-            )
-            .padding(16)
-            .width(Length::Fill)
-            .class(cosmic::theme::Container::Card)
-            .into()
+            card(widget::column::with_capacity(2)
+                .spacing(6)
+                .push(widget::text::heading("No removable drives found"))
+                .push(widget::text::caption("Insert a USB drive, then press Rescan."))
+                .into())
         } else {
             let mut col = widget::column::with_capacity(self.drives.len()).spacing(4);
             for (i, drive) in self.drives.iter().enumerate() {
@@ -293,16 +535,11 @@ impl MediaWriter {
                         .width(Length::Fill),
                 );
             }
-            widget::container(col)
-                .padding(12)
-                .width(Length::Fill)
-                .class(cosmic::theme::Container::Card)
-                .into()
+            card(col.into())
         };
-
         let mut column = widget::column::with_capacity(4)
             .spacing(12)
-            .push(self.header(Step::Drive))
+            .push(self.header())
             .push(content)
             .push(
                 widget::row::with_capacity(2)
@@ -310,35 +547,28 @@ impl MediaWriter {
                     .push(widget::Space::new().width(Length::Fill)),
             );
         if let Some(err) = &self.error {
-            column = column.push(widget::text::caption(format!("Write failed: {err}")));
+            column = column.push(widget::text::caption(format!("Failed: {err}")));
         }
         if !self.drives.is_empty() {
-            column = column.push(widget::text::caption(
-                "The selected drive will be completely erased.",
-            ));
+            column = column
+                .push(widget::text::caption("The selected drive will be completely erased."));
         }
         column.into()
     }
 
-    fn writing_view(&self) -> Element<'_, Message> {
+    fn progress_view(&self, title: &'static str, what: &'static str) -> Element<'_, Message> {
         let pct = (self.progress * 100.0).round() as u32;
-        let target = self
-            .selected_drive
-            .and_then(|i| self.drives.get(i))
-            .map_or_else(|| "the drive".to_string(), DriveInfo::label);
-
-        widget::column::with_capacity(5)
+        widget::column::with_capacity(4)
             .spacing(16)
             .width(Length::Fill)
             .align_x(Alignment::Center)
-            .push(widget::text::title1("Writing DraftOS"))
-            .push(widget::text::body(format!("to {target}")).center())
+            .push(widget::text::title1(title))
             .push(widget::Space::new().height(Length::Fixed(8.0)))
             .push(
                 widget::container(widget::determinate_linear(self.progress).width(Length::Fixed(360.0)))
                     .center_x(Length::Fill),
             )
-            .push(widget::text::caption(format!("{pct}%  ·  don't remove the drive")))
+            .push(widget::text::caption(format!("{pct}%  ·  {what}")))
             .into()
     }
 
@@ -349,16 +579,13 @@ impl MediaWriter {
             .align_x(Alignment::Center)
             .push(widget::icon::from_name("emblem-default-symbolic").size(96).icon())
             .push(widget::text::title1("Your drive is ready"))
-            .push(
-                widget::text::body("Remove it and boot from it to install DraftOS.").center(),
-            )
+            .push(widget::text::body("Remove it and boot from it to install DraftOS.").center())
             .into()
     }
 
     fn footer(&self) -> Element<'_, Message> {
-        let step = Step::ALL[self.step];
-        let hide_back = self.step == 0 || matches!(step, Step::Writing | Step::Done);
-
+        let hide_back =
+            matches!(self.step, Step::Source | Step::Download | Step::Writing | Step::Done);
         let left: Element<'_, Message> = if hide_back {
             widget::Space::new().into()
         } else {
@@ -366,7 +593,9 @@ impl MediaWriter {
         };
         let left = widget::container(left).width(Length::Fixed(140.0));
 
-        let (label, msg) = match step {
+        let (label, msg) = match self.step {
+            Step::Edition => ("Download", self.can_advance().then_some(Message::Next)),
+            Step::Download => ("Downloading…", None),
             Step::Drive => ("Write", self.can_advance().then_some(Message::Next)),
             Step::Writing => ("Writing…", None),
             Step::Done => ("Finish", Some(Message::Close)),
@@ -388,25 +617,58 @@ impl MediaWriter {
             .push(left)
             .push(widget::Space::new().width(Length::Fill))
             .push(right);
-
         widget::container(footer).padding(24).width(Length::Fill).into()
+    }
+}
+
+/// Wrap content in a standard card container.
+fn card(content: Element<'_, Message>) -> Element<'_, Message> {
+    widget::container(content)
+        .padding(16)
+        .width(Length::Fill)
+        .class(cosmic::theme::Container::Card)
+        .into()
+}
+
+/// Fetch and parse the editions manifest with `curl`.
+async fn load_manifest(url: String) -> Result<Vec<Edition>, String> {
+    let output = tokio::process::Command::new("curl")
+        .args(["-fsSL", "--retry", "3", &url])
+        .output()
+        .await
+        .map_err(|e| format!("could not fetch the edition list: {e}"))?;
+    if !output.status.success() {
+        return Err("could not reach the edition list".into());
+    }
+    let manifest: Manifest =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("bad edition list: {e}"))?;
+    Ok(manifest.editions)
+}
+
+/// Download `url` to `dest` with `curl` (progress is tracked by polling the file).
+async fn download_iso(url: String, dest: String) -> Result<String, String> {
+    if url.is_empty() {
+        return Err("this edition has no download yet".into());
+    }
+    let status = tokio::process::Command::new("curl")
+        .args(["-fL", "--retry", "3", "-o", &dest, &url])
+        .status()
+        .await
+        .map_err(|e| format!("could not start the download: {e}"))?;
+    if status.success() {
+        Ok(dest)
+    } else {
+        Err("the download failed (is the release published yet?)".into())
     }
 }
 
 /// Write the ISO to the device as root (pkexec prompts for authentication).
 async fn write_iso(iso: String, device: String) -> Result<(), String> {
     let output = tokio::process::Command::new("pkexec")
-        .args([
-            "dd",
-            &format!("if={iso}"),
-            &format!("of={device}"),
-            "bs=4M",
-            "conv=fsync",
-        ])
+        .args(["dd", &format!("if={iso}"), &format!("of={device}"), "bs=4M", "conv=fsync"])
         .output()
         .await
         .map_err(|e| format!("could not start the writer: {e}"))?;
-
     if output.status.success() {
         Ok(())
     } else {

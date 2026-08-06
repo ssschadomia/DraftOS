@@ -1400,6 +1400,8 @@ version = "0.1.0"
 dependencies = [
  "draftos-common",
  "libcosmic",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
