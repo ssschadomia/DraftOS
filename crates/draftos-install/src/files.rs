@@ -52,6 +52,13 @@ pub fn x11_keyboard_conf(layouts: &[String]) -> String {
     )
 }
 
+/// Plymouth daemon config — selects the boot-splash theme. `bgrt` shows the
+/// firmware/OEM logo with a spinner (falling back to the plain `spinner` theme
+/// when no logo is present), which gives a clean, modern boot on most hardware.
+pub fn plymouthd_conf() -> String {
+    "[Daemon]\nTheme=bgrt\n".to_string()
+}
+
 /// `systemd-boot` `loader/loader.conf`.
 pub fn loader_conf() -> String {
     "default draftos.conf\ntimeout 3\nconsole-mode max\neditor no\n".to_string()
@@ -72,19 +79,25 @@ pub fn loader_entry(kernel_image: &str, initramfs: &str, options: &str) -> Strin
 /// container. With encryption we hand the LUKS partition to mkinitcpio's
 /// `encrypt` hook and boot the mapped device.
 pub fn kernel_cmdline(root_uuid: &str, encrypted: bool) -> String {
+    // `quiet splash` + low log levels hand the screen to Plymouth instead of
+    // scrolling boot messages; `vt.global_cursor_default=0` hides the blinking
+    // cursor before the greeter appears.
+    let quiet = "rw quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_default=0";
     if encrypted {
-        format!("cryptdevice=UUID={root_uuid}:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ rw quiet")
+        format!("cryptdevice=UUID={root_uuid}:cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ {quiet}")
     } else {
-        format!("root=UUID={root_uuid} rootflags=subvol=@ rw quiet")
+        format!("root=UUID={root_uuid} rootflags=subvol=@ {quiet}")
     }
 }
 
-/// The `mkinitcpio` HOOKS line — adds `encrypt` before `filesystems` for LUKS.
+/// The `mkinitcpio` HOOKS line. `plymouth` (right after `udev`) drives the boot
+/// splash; for LUKS we use `plymouth-encrypt` so the passphrase prompt is drawn
+/// by Plymouth rather than on the bare console.
 pub fn mkinitcpio_hooks(encrypted: bool) -> String {
     if encrypted {
-        "HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)".into()
+        "HOOKS=(base udev plymouth autodetect microcode modconf kms keyboard keymap consolefont block plymouth-encrypt filesystems fsck)".into()
     } else {
-        "HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)".into()
+        "HOOKS=(base udev plymouth autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)".into()
     }
 }
 
@@ -117,19 +130,21 @@ mod tests {
 
     #[test]
     fn cmdline_switches_on_encryption() {
-        assert_eq!(
-            kernel_cmdline("ABC", false),
-            "root=UUID=ABC rootflags=subvol=@ rw quiet"
-        );
+        let plain = kernel_cmdline("ABC", false);
+        assert!(plain.starts_with("root=UUID=ABC rootflags=subvol=@ rw"));
+        assert!(plain.contains("quiet splash"));
         let enc = kernel_cmdline("ABC", true);
         assert!(enc.contains("cryptdevice=UUID=ABC:cryptroot"));
+        assert!(enc.contains("quiet splash"));
         assert!(enc.contains("root=/dev/mapper/cryptroot"));
     }
 
     #[test]
     fn hooks_add_encrypt_only_when_needed() {
-        assert!(mkinitcpio_hooks(true).contains(" encrypt filesystems"));
+        assert!(mkinitcpio_hooks(true).contains(" plymouth-encrypt filesystems"));
         assert!(!mkinitcpio_hooks(false).contains("encrypt"));
+        // Plymouth splash on both paths.
+        assert!(mkinitcpio_hooks(false).contains(" plymouth "));
     }
 
     #[test]

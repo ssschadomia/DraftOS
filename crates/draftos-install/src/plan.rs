@@ -30,10 +30,21 @@ fn packages(req: &InstallRequest) -> Vec<&'static str> {
         "networkmanager", "sudo", "polkit",
         "git", "vim", "nano", "man-db", "xdg-user-dirs",
         "efibootmgr",
-        // COSMIC desktop
-        "cosmic", "cosmic-greeter", "xdg-desktop-portal-cosmic",
+        // quiet, graphical boot (Plymouth splash instead of terminal spew)
+        "plymouth",
+        // COSMIC desktop — the session, login greeter, portal, and core apps
+        // (mirrors what the live ISO ships so the installed system matches).
+        "cosmic-session", "cosmic-greeter", "xdg-desktop-portal-cosmic",
+        "cosmic-settings", "cosmic-files", "cosmic-terminal",
+        "cosmic-text-editor", "cosmic-store", "cosmic-wallpapers",
+        // graphics stack + keyboard maps for a usable desktop on real hardware
+        "mesa", "vulkan-intel", "vulkan-radeon", "vulkan-icd-loader",
+        "xorg-xwayland", "xkeyboard-config",
+        // audio
+        "pipewire", "pipewire-pulse", "pipewire-alsa", "wireplumber",
         // fonts
-        "inter-font", "ttf-jetbrains-mono", "noto-fonts",
+        "inter-font", "ttf-jetbrains-mono", "noto-fonts", "noto-fonts-emoji",
+        "ttf-dejavu",
     ];
     match req.kernel {
         Kernel::Standard => {
@@ -130,6 +141,7 @@ pub fn plan(req: &InstallRequest) -> anyhow::Result<Vec<Step>> {
     steps.push(Step::write(Phase::Configure, "Hosts", "/etc/hosts", files::hosts_file(&req.hostname), 0o644));
     steps.push(Step::chroot(Phase::Configure, "Set time zone", &["ln", "-sf", &format!("/usr/share/zoneinfo/{}", req.timezone), "/etc/localtime"]));
     steps.push(Step::chroot(Phase::Configure, "Sync hardware clock", &["hwclock", "--systohc"]));
+    steps.push(Step::write(Phase::Configure, "Boot splash theme", "/etc/plymouth/plymouthd.conf", files::plymouthd_conf(), 0o644));
     steps.push(Step::sh(Phase::Configure, "Set mkinitcpio hooks", format!("sed -i 's/^HOOKS=.*/{}/' /mnt/etc/mkinitcpio.conf", files::mkinitcpio_hooks(encrypted))));
     steps.push(Step::chroot(Phase::Configure, "Build initramfs", &["mkinitcpio", "-P"]));
 
