@@ -21,10 +21,16 @@ RUN pacman -Syu --noconfirm --needed --disable-download-timeout \
         btrfs-progs dosfstools \
         squashfs-tools \
         zstd \
+        reflector \
         # Rust + libcosmic build deps (to compile draftos-installer + engine) --
         rust cargo pkgconf cmake clang \
         libxkbcommon wayland mesa vulkan-icd-loader \
         fontconfig freetype2 expat \
  && pacman -Scc --noconfirm
+
+# Regenerate a fresh, fast mirrorlist (mkarchiso's pacstrap uses this via the
+# profile's pacman.conf). Falls back to the bootstrap list above if offline.
+RUN reflector --protocol https --age 12 --latest 20 --sort score \
+        --save /etc/pacman.d/mirrorlist || true
 
 WORKDIR /iso

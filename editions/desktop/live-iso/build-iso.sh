@@ -43,6 +43,9 @@ echo ">> Staged both binaries into the live ISO."
 cleanup() { rm -f "$PROFILE/airootfs/usr/bin/draftos-installer" "$PROFILE/airootfs/usr/bin/draftos-install"; }
 trap cleanup EXIT
 
+# Start from a clean work dir (a failed run leaves a root-owned partial tree).
+rm -rf "$HERE/work"
+
 echo ">> Running mkarchiso (releng base + DraftOS overrides)..."
 # Assemble archiso's stock `releng` profile inside the container and overlay our
 # archiso/ on top (profiledef, packages, pacman.conf, airootfs merge over it).
