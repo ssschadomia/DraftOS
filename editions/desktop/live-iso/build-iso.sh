@@ -50,8 +50,12 @@ echo ">> Running mkarchiso (releng base + DraftOS overrides)..."
 # Assemble archiso's stock `releng` profile inside the container and overlay our
 # archiso/ on top (profiledef, packages, pacman.conf, airootfs merge over it).
 # --privileged: mkarchiso mounts loopback images and builds the squashfs.
+# A persistent pacman package cache (named volume) so repeat builds don't
+# re-download ~1.5 GB of packages — the biggest chunk of rebuild time. pacstrap
+# runs with -c, so it fetches into the container's /var/cache/pacman/pkg.
 podman run --rm --privileged \
     -v "$HERE:/iso:z" \
+    -v draftos-pkgcache:/var/cache/pacman/pkg \
     -w /iso \
     "$BUILDER_IMAGE" \
     bash -euo pipefail -c '
