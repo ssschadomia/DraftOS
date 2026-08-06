@@ -1390,6 +1390,8 @@ dependencies = [
  "draftos-common",
  "draftos-install",
  "libcosmic",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

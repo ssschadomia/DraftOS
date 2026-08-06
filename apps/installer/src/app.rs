@@ -18,8 +18,12 @@ pub enum Message {
     Next,
     Back,
     Close,
+    /// Reboot the machine (Restart button on the Done step).
+    Reboot,
     /// Timer tick that drives the install progress animation.
     Tick,
+    /// The install engine finished (Ok) or failed with a message (Err).
+    InstallFinished(Result<(), String>),
     SelectLocale(usize),
     SetLocaleSearch(String),
     AddLayout(String),
@@ -91,8 +95,11 @@ pub struct Installer {
     plan_steps: Vec<(String, String)>,
     /// Index of the step currently shown on the Install screen.
     install_step: usize,
-    /// Set when the Summary → Install transition can't build a valid request.
+    /// Set when the Summary → Install transition can't build a valid request,
+    /// or when the engine reports the install failed.
     summary_error: Option<String>,
+    /// The serialized InstallRequest handed to the engine on the Install step.
+    install_json: String,
 }
 
 impl cosmic::Application for Installer {
@@ -187,6 +194,7 @@ impl cosmic::Application for Installer {
             plan_steps: Vec::new(),
             install_step: 0,
             summary_error: None,
+            install_json: String::new(),
         };
         // Dev preview: when jumping straight to the Install step, populate a demo
         // plan so the screen renders (normally the plan is built at Summary→Install).
@@ -207,9 +215,17 @@ impl cosmic::Application for Installer {
             Message::Next => {
                 if self.can_advance() {
                     if Step::ALL[self.step] == Step::Summary {
-                        // Build the engine plan before entering Install; block on error.
+                        // Build the engine plan, enter Install, and kick off the
+                        // real install (engine via pkexec). Blocks here on a bad
+                        // config; a runtime failure bounces back with an error.
                         match self.build_plan() {
-                            Ok(()) => self.step = (self.step + 1).min(last),
+                            Ok(()) => {
+                                self.step = (self.step + 1).min(last);
+                                let json = self.install_json.clone();
+                                return cosmic::task::future(async move {
+                                    Message::InstallFinished(run_engine(json).await)
+                                });
+                            }
                             Err(e) => self.summary_error = Some(e),
                         }
                     } else {
@@ -219,18 +235,31 @@ impl cosmic::Application for Installer {
             }
             Message::Back => self.step = self.step.saturating_sub(1),
             Message::Tick => {
+                // Animate through the plan, but hold near the end until the engine
+                // actually reports it finished (InstallFinished).
                 if Step::ALL[self.step] == Step::Install && !self.plan_steps.is_empty() {
-                    if self.install_step + 1 >= self.plan_steps.len() {
-                        self.install_step = self.plan_steps.len() - 1;
-                        self.install_progress = 1.0;
-                        self.step = (self.step + 1).min(last); // → Done
-                    } else {
+                    let cap = self.plan_steps.len() - 1;
+                    if self.install_step < cap {
                         self.install_step += 1;
-                        self.install_progress =
-                            self.install_step as f32 / self.plan_steps.len() as f32;
                     }
+                    self.install_progress =
+                        (self.install_step as f32 / self.plan_steps.len() as f32).min(0.95);
                 }
             }
+            Message::InstallFinished(result) => match result {
+                Ok(()) => {
+                    self.install_progress = 1.0;
+                    self.step = (self.step + 1).min(last); // Install → Done
+                }
+                Err(e) => {
+                    self.summary_error = Some(format!("Installation failed: {e}"));
+                    // Bounce back to Summary so the user can review and retry.
+                    self.step = Step::ALL
+                        .iter()
+                        .position(|s| *s == Step::Summary)
+                        .unwrap_or(self.step);
+                }
+            },
             Message::SelectLocale(i) => {
                 self.selected_locale = Some(i);
                 self.config.locale = self.locales.get(i).cloned();
@@ -292,6 +321,22 @@ impl cosmic::Application for Installer {
                     return cosmic::iced::window::close(id);
                 }
             }
+            Message::Reboot => {
+                // Only actually reboot from the live installer; elsewhere (dev
+                // host) just close the window so we never reboot a real machine.
+                if std::path::Path::new("/run/archiso").exists() {
+                    return cosmic::task::future(async {
+                        let _ = tokio::process::Command::new("pkexec")
+                            .args(["systemctl", "reboot"])
+                            .status()
+                            .await;
+                        Message::Close
+                    });
+                }
+                if let Some(id) = self.core.main_window_id() {
+                    return cosmic::iced::window::close(id);
+                }
+            }
         }
         cosmic::app::Task::none()
     }
@@ -309,27 +354,28 @@ impl cosmic::Application for Installer {
         let framed = widget::container(widget::container(inner).width(Length::Fixed(620.0)))
             .center_x(Length::Fill);
 
-        let content_area = if centered {
-            widget::column::with_capacity(3)
+        let body: Element<'_, Message> = if centered {
+            // Hero screens (Install/Done): vertically centered, content is short.
+            let content_area = widget::column::with_capacity(3)
                 .push(widget::Space::new().height(Length::Fill))
                 .push(framed)
-                .push(widget::Space::new().height(Length::Fill))
+                .push(widget::Space::new().height(Length::Fill));
+            widget::container(content_area)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(Padding { top: 24.0, right: 32.0, bottom: 24.0, left: 32.0 })
+                .into()
         } else {
-            widget::column::with_capacity(2)
-                .push(framed)
-                .push(widget::Space::new().height(Length::Fill))
+            // Form steps: scroll when the content is taller than the window, so
+            // every option/field is reachable at any size. The footer stays pinned.
+            let padded = widget::container(framed)
+                .width(Length::Fill)
+                .padding(Padding { top: 40.0, right: 32.0, bottom: 24.0, left: 32.0 });
+            widget::scrollable(padded)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
         };
-
-        let padding = if centered {
-            Padding { top: 24.0, right: 32.0, bottom: 24.0, left: 32.0 }
-        } else {
-            Padding { top: 40.0, right: 32.0, bottom: 8.0, left: 32.0 }
-        };
-
-        let body = widget::container(content_area)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(padding);
 
         widget::column::with_capacity(2)
             .push(body)
@@ -338,9 +384,10 @@ impl cosmic::Application for Installer {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // Only tick while the install screen is animating.
-        if Step::ALL[self.step] == Step::Install && self.install_progress < 1.0 {
-            cosmic::iced::time::every(Duration::from_millis(90)).map(|_| Message::Tick)
+        // Animate the install screen up to the ~95% hold point; after that we
+        // wait for the engine's InstallFinished.
+        if Step::ALL[self.step] == Step::Install && self.install_progress < 0.95 {
+            cosmic::iced::time::every(Duration::from_millis(200)).map(|_| Message::Tick)
         } else {
             Subscription::none()
         }
@@ -376,6 +423,7 @@ impl Installer {
     fn build_plan(&mut self) -> Result<(), String> {
         let request = self.config.to_request()?;
         let steps = draftos_install::plan(&request).map_err(|e| e.to_string())?;
+        self.install_json = serde_json::to_string(&request).map_err(|e| e.to_string())?;
         self.plan_steps = steps
             .iter()
             .map(|s| (s.phase.label().to_string(), s.title.clone()))
@@ -987,7 +1035,7 @@ impl Installer {
         let (label, message) = match step {
             Step::Summary => ("Install", Some(Message::Next)),
             Step::Install => ("Installing…", None),
-            Step::Done => ("Restart", Some(Message::Close)),
+            Step::Done => ("Restart", Some(Message::Reboot)),
             _ => ("Continue", self.can_advance().then_some(Message::Next)),
         };
         let mut next = widget::button::suggested(label);
@@ -1022,6 +1070,48 @@ struct ListSpec {
     display: fn(&str) -> String,
     on_select: fn(usize) -> Message,
     on_search: fn(String) -> Message,
+}
+
+/// Run the install engine as root, feeding it the request JSON on stdin.
+///
+/// Uses `pkexec` so it can partition and install; the live ISO's polkit rule lets
+/// the live user do this without a prompt. The engine refuses to touch anything
+/// outside a live environment, so this is safe to invoke anywhere.
+async fn run_engine(request_json: String) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut child = tokio::process::Command::new("pkexec")
+        .args(["draftos-install", "--config", "-", "--commit"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not launch the install engine: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(request_json.as_bytes())
+            .await
+            .map_err(|e| format!("could not send the request: {e}"))?;
+        // stdin dropped here → EOF, so the engine reads the request and proceeds.
+    }
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("the engine did not run: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let last = stderr
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("the installation did not complete");
+        Err(last.to_string())
+    }
 }
 
 /// A demo engine plan used only to preview the Install screen during development.
