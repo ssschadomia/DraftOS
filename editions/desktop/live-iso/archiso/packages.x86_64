@@ -12,6 +12,7 @@ intel-ucode
 mkinitcpio
 mkinitcpio-archiso
 mkinitcpio-nfs-utils
+plymouth
 archiso
 syslinux
 edk2-shell
