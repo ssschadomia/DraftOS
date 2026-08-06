@@ -22,6 +22,8 @@ pub enum Message {
     Reboot,
     /// Timer tick that drives the install progress animation.
     Tick,
+    /// Real progress streamed from the engine: (percent, current step title).
+    InstallProgress(u32, String),
     /// The install engine finished (Ok) or failed with a message (Err).
     InstallFinished(Result<(), String>),
     SelectLocale(usize),
@@ -100,6 +102,8 @@ pub struct Installer {
     summary_error: Option<String>,
     /// The serialized InstallRequest handed to the engine on the Install step.
     install_json: String,
+    /// The current step title, streamed live from the engine during a real install.
+    install_current: String,
 }
 
 impl cosmic::Application for Installer {
@@ -195,6 +199,7 @@ impl cosmic::Application for Installer {
             install_step: 0,
             summary_error: None,
             install_json: String::new(),
+            install_current: String::new(),
         };
         // Dev preview: when jumping straight to the Install step, populate a demo
         // plan so the screen renders (normally the plan is built at Summary→Install).
@@ -221,10 +226,9 @@ impl cosmic::Application for Installer {
                         match self.build_plan() {
                             Ok(()) => {
                                 self.step = (self.step + 1).min(last);
+                                self.install_current = String::new();
                                 let json = self.install_json.clone();
-                                return cosmic::task::future(async move {
-                                    Message::InstallFinished(run_engine(json).await)
-                                });
+                                return cosmic::task::stream(engine_stream(json));
                             }
                             Err(e) => self.summary_error = Some(e),
                         }
@@ -244,6 +248,12 @@ impl cosmic::Application for Installer {
                     }
                     self.install_progress =
                         (self.install_step as f32 / self.plan_steps.len() as f32).min(0.95);
+                }
+            }
+            Message::InstallProgress(pct, title) => {
+                self.install_progress = (f32::from(pct as u16) / 100.0).clamp(0.0, 1.0);
+                if !title.is_empty() {
+                    self.install_current = title;
                 }
             }
             Message::InstallFinished(result) => match result {
@@ -386,7 +396,12 @@ impl cosmic::Application for Installer {
     fn subscription(&self) -> Subscription<Message> {
         // Animate the install screen up to the ~95% hold point; after that we
         // wait for the engine's InstallFinished.
-        if Step::ALL[self.step] == Step::Install && self.install_progress < 0.95 {
+        // Animate only the dev preview (no request built); a real install streams
+        // its own progress from the engine, so no ticking is needed there.
+        if Step::ALL[self.step] == Step::Install
+            && self.install_json.is_empty()
+            && self.install_progress < 0.95
+        {
             cosmic::iced::time::every(Duration::from_millis(200)).map(|_| Message::Tick)
         } else {
             Subscription::none()
@@ -473,24 +488,28 @@ impl Installer {
             .into()
     }
 
-    /// Install progress: the real engine plan step being applied, and a bar.
+    /// Install progress: the current step (streamed live from the engine, or the
+    /// animated preview) and a bar.
     fn install_view(&self) -> Element<'_, Message> {
-        let total = self.plan_steps.len();
-        let (phase, title) = self
-            .plan_steps
-            .get(self.install_step)
-            .cloned()
-            .unwrap_or_else(|| ("Preparing".to_string(), String::new()));
+        // Prefer the live step title streamed from the engine; fall back to the
+        // animated preview plan.
+        let current = if self.install_current.is_empty() {
+            self.plan_steps
+                .get(self.install_step)
+                .map(|(_, title)| title.clone())
+                .unwrap_or_else(|| "Preparing…".to_string())
+        } else {
+            self.install_current.clone()
+        };
         let pct = (self.install_progress * 100.0).round() as u32;
 
-        widget::column::with_capacity(6)
+        widget::column::with_capacity(5)
             .spacing(16)
             .width(Length::Fill)
             .align_x(Alignment::Center)
             .push(widget::text::title1("Installing DraftOS"))
             .push(widget::Space::new().height(Length::Fixed(8.0)))
-            .push(widget::text::heading(phase))
-            .push(widget::text::body(title).center())
+            .push(widget::text::body(current).center())
             .push(widget::Space::new().height(Length::Fixed(8.0)))
             .push(
                 widget::container(
@@ -498,10 +517,7 @@ impl Installer {
                 )
                 .center_x(Length::Fill),
             )
-            .push(widget::text::caption(format!(
-                "{pct}%  ·  step {} of {total}",
-                (self.install_step + 1).min(total.max(1))
-            )))
+            .push(widget::text::caption(format!("{pct}%")))
             .into()
     }
 
@@ -1072,46 +1088,98 @@ struct ListSpec {
     on_search: fn(String) -> Message,
 }
 
-/// Run the install engine as root, feeding it the request JSON on stdin.
+/// Run the install engine as root and stream its live progress to the UI.
 ///
 /// Uses `pkexec` so it can partition and install; the live ISO's polkit rule lets
 /// the live user do this without a prompt. The engine refuses to touch anything
 /// outside a live environment, so this is safe to invoke anywhere.
-async fn run_engine(request_json: String) -> Result<(), String> {
-    use tokio::io::AsyncWriteExt;
+///
+/// The engine emits `PROGRESS <pct> <title>` lines on stdout as each step runs;
+/// we parse those into [`Message::InstallProgress`] so the bar reflects the real
+/// work. Human-readable logs and the failure reason go to stderr. When the
+/// process exits we send a single [`Message::InstallFinished`].
+fn engine_stream(request_json: String) -> impl cosmic::iced::futures::Stream<Item = Message> {
+    use cosmic::iced::futures::SinkExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    let mut child = tokio::process::Command::new("pkexec")
-        .args(["draftos-install", "--config", "-", "--commit"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not launch the install engine: {e}"))?;
+    cosmic::iced::stream::channel(32, move |mut output: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
+        let spawned = tokio::process::Command::new("pkexec")
+            .args(["draftos-install", "--config", "-", "--commit"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(request_json.as_bytes())
-            .await
-            .map_err(|e| format!("could not send the request: {e}"))?;
-        // stdin dropped here → EOF, so the engine reads the request and proceeds.
-    }
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = output
+                    .send(Message::InstallFinished(Err(format!(
+                        "could not launch the install engine: {e}"
+                    ))))
+                    .await;
+                return;
+            }
+        };
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("the engine did not run: {e}"))?;
+        // Feed the request, then close stdin so the engine proceeds.
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Err(e) = stdin.write_all(request_json.as_bytes()).await {
+                let _ = output
+                    .send(Message::InstallFinished(Err(format!(
+                        "could not send the request: {e}"
+                    ))))
+                    .await;
+                return;
+            }
+            drop(stdin);
+        }
 
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let last = stderr
-            .lines()
-            .rev()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("the installation did not complete");
-        Err(last.to_string())
-    }
+        // Drain stderr in the background so the pipe never blocks the engine, and
+        // keep the last non-empty line as the failure reason.
+        let stderr = child.stderr.take();
+        let stderr_task = tokio::spawn(async move {
+            let mut last = String::new();
+            if let Some(err) = stderr {
+                let mut lines = BufReader::new(err).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if !line.trim().is_empty() {
+                        last = line;
+                    }
+                }
+            }
+            last
+        });
+
+        // Parse PROGRESS lines from stdout into UI updates.
+        if let Some(stdout) = child.stdout.take() {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(rest) = line.strip_prefix("PROGRESS ") {
+                    let (pct, title) = rest.split_once(' ').unwrap_or((rest, ""));
+                    if let Ok(pct) = pct.trim().parse::<u32>() {
+                        let _ = output
+                            .send(Message::InstallProgress(pct, title.trim().to_string()))
+                            .await;
+                    }
+                }
+            }
+        }
+
+        let status = child.wait().await;
+        let reason = stderr_task.await.unwrap_or_default();
+
+        let result = match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(_) => Err(if reason.is_empty() {
+                "the installation did not complete".to_string()
+            } else {
+                reason
+            }),
+            Err(e) => Err(format!("the engine did not run: {e}")),
+        };
+        let _ = output.send(Message::InstallFinished(result)).await;
+    })
 }
 
 /// A demo engine plan used only to preview the Install screen during development.

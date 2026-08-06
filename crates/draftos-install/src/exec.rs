@@ -42,7 +42,8 @@ pub fn execute(steps: &[Step], commit: bool, target_root: &str) -> anyhow::Resul
             eprintln!("\n== {} ==", step.phase.label());
         }
         let pct = i * 100 / total;
-        println!("PROGRESS {pct} {}", step.phase.label());
+        // Machine-readable progress for a front-end: "PROGRESS <pct> <step title>".
+        println!("PROGRESS {pct} {}", step.title);
         eprintln!("[{}/{}] {}", i + 1, total, step.title);
 
         if !commit {
