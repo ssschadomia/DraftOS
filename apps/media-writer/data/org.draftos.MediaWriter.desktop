@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DraftOS Media Writer
+GenericName=USB Media Writer
+Comment=Write a DraftOS ISO to a USB drive
+Exec=draftos-media-writer
+Icon=org.draftos.MediaWriter
+Categories=System;Utility;
+Keywords=usb;iso;write;flash;bootable;media;installer;draftos;
+StartupNotify=true

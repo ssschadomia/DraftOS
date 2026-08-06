@@ -1395,6 +1395,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "draftos-media-writer"
+version = "0.1.0"
+dependencies = [
+ "draftos-common",
+ "libcosmic",
+ "tokio",
+]
+
+[[package]]
 name = "draftos-welcome"
 version = "0.1.0"
 dependencies = [

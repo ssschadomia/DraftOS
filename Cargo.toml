@@ -12,6 +12,7 @@ members = [
     "crates/draftos-install",
     "apps/welcome",
     "apps/installer",
+    "apps/media-writer",
     # "crates/draftos-link",
     # "cli/draftos",
     # "cli/draftbox",

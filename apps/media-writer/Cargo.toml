@@ -1,0 +1,24 @@
+[package]
+name = "draftos-media-writer"
+description = "DraftOS Media Writer — write a DraftOS ISO to a USB drive (libcosmic)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "draftos-media-writer"
+path = "src/main.rs"
+
+[dependencies]
+draftos-common.workspace = true
+tokio.workspace = true
+libcosmic = { workspace = true, features = [
+    "winit",
+    "tokio",
+    "xdg-portal",
+    "single-instance",
+    "wgpu",
+    "wayland",
+] }
