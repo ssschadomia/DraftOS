@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=App Center
+GenericName=Software Store
+Comment=Discover and install apps on DraftOS
+Exec=draftos-store
+Icon=org.draftos.Store
+Categories=System;PackageManager;
+Keywords=apps;store;software;install;flatpak;flathub;draftos;
+StartupNotify=true

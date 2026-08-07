@@ -1,0 +1,30 @@
+# Maintainer: DraftOS <https://github.com/ssschadomia/DraftOS>
+#
+# The DraftOS identity layer: the COSMIC desktop preset (top panel + floating
+# macOS-style dock + frosted glass + blue accent), the default wallpaper, and
+# the Plymouth boot-splash default. Content lives under ./files (NOT ./src,
+# which makepkg owns as its build dir) and is shipped verbatim, so this package
+# is what makes an installed system *look* like DraftOS rather than stock Arch.
+pkgname=draftos-branding
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="DraftOS identity: COSMIC desktop preset, wallpaper and boot splash"
+arch=('any')
+url="https://github.com/ssschadomia/DraftOS"
+license=('GPL-3.0-or-later')
+# Backs up the boot-splash config so a local edit isn't clobbered on upgrade.
+backup=('etc/plymouth/plymouthd.conf')
+# System defaults these files configure — not hard deps, but this is where they
+# take effect. Kept as optdepends so branding can be installed anywhere.
+optdepends=('cosmic-session: the desktop these presets configure'
+            'plymouth: the boot splash this theme selects')
+
+package() {
+    # Ship the entire ./files/{usr,etc} tree verbatim into the package root.
+    cp -a "$startdir/files/usr" "$pkgdir/usr"
+    cp -a "$startdir/files/etc" "$pkgdir/etc"
+
+    # Normalise permissions (git/cp may carry odd modes).
+    find "$pkgdir/usr" "$pkgdir/etc" -type d -exec chmod 755 {} +
+    find "$pkgdir/usr" "$pkgdir/etc" -type f -exec chmod 644 {} +
+}

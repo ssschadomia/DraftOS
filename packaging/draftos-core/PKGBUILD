@@ -1,0 +1,73 @@
+# Maintainer: DraftOS <https://github.com/ssschadomia/DraftOS>
+#
+# The DraftOS layer as a single metapackage. Installing draftos-core pulls the
+# whole DraftOS desktop: our branding + first-party apps, the COSMIC session and
+# core apps, the graphics/audio stack, services and fonts. The install engine
+# pacstraps `base linux linux-firmware <ucode> draftos-core`, and users get
+# updates to the entire DraftOS layer through `pacman -Syu`.
+pkgname=draftos-core
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="DraftOS desktop metapackage (branding, apps, COSMIC, services)"
+arch=('any')
+url="https://github.com/ssschadomia/DraftOS"
+license=('GPL-3.0-or-later')
+depends=(
+    # DraftOS layer
+    'draftos-branding'
+    'draftos-apps'
+    # COSMIC desktop (our App Center replaces the upstream cosmic-store)
+    'cosmic-session'
+    'cosmic-greeter'
+    'xdg-desktop-portal-cosmic'
+    'cosmic-settings'
+    'cosmic-files'
+    'cosmic-terminal'
+    'cosmic-text-editor'
+    'cosmic-wallpapers'
+    # quiet graphical boot
+    'plymouth'
+    # networking, session, hardware services
+    'networkmanager'
+    'sudo'
+    'polkit'
+    'bluez'
+    'bluez-utils'
+    'power-profiles-daemon'
+    # filesystem tooling + boot
+    'btrfs-progs'
+    'snapper'
+    'zram-generator'
+    'efibootmgr'
+    # graphics + input maps
+    'mesa'
+    'vulkan-intel'
+    'vulkan-radeon'
+    'vulkan-icd-loader'
+    'xorg-xwayland'
+    'xkeyboard-config'
+    # audio
+    'pipewire'
+    'pipewire-pulse'
+    'pipewire-alsa'
+    'wireplumber'
+    # app distribution
+    'flatpak'
+    # base userland niceties
+    'git'
+    'vim'
+    'nano'
+    'man-db'
+    'xdg-user-dirs'
+    # fonts
+    'inter-font'
+    'ttf-jetbrains-mono'
+    'noto-fonts'
+    'noto-fonts-emoji'
+    'ttf-dejavu'
+)
+
+package() {
+    # Metapackage: no payload of its own.
+    :
+}

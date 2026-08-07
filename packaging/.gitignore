@@ -1,0 +1,10 @@
+# Build outputs — never commit built packages, staged payloads, or makepkg's
+# scratch dirs. The committed inputs are the PKGBUILDs and draftos-branding/files.
+out/
+draftos-apps/payload/
+# makepkg scratch dirs (it owns ./src and ./pkg next to each PKGBUILD)
+draftos-*/src/
+draftos-*/pkg/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+*.log
