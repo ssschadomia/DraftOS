@@ -24,7 +24,11 @@ package() {
     cp -a "$startdir/files/usr" "$pkgdir/usr"
     cp -a "$startdir/files/etc" "$pkgdir/etc"
 
-    # Normalise permissions (git/cp may carry odd modes).
+    # Normalise permissions (git/cp may carry odd modes), then make executables
+    # in /usr/bin actually executable (the first-boot launcher).
     find "$pkgdir/usr" "$pkgdir/etc" -type d -exec chmod 755 {} +
     find "$pkgdir/usr" "$pkgdir/etc" -type f -exec chmod 644 {} +
+    if [ -d "$pkgdir/usr/bin" ]; then
+        chmod 755 "$pkgdir"/usr/bin/*
+    fi
 }

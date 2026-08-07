@@ -1,0 +1,35 @@
+name: CI
+
+# Build, lint and test the Rust workspace on every push/PR. Runs in an Arch
+# container with the libcosmic build deps (the GUI apps need them), matching the
+# environment the apps actually ship in.
+
+on:
+  push:
+    branches: [main]
+    paths: ['crates/**', 'apps/**', 'cli/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml']
+  pull_request:
+    paths: ['crates/**', 'apps/**', 'cli/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install toolchain + libcosmic build deps
+        run: |
+          pacman -Sy --needed --noconfirm \
+            rust git \
+            libxkbcommon wayland mesa vulkan-icd-loader fontconfig freetype2 expat
+
+      - uses: actions/checkout@v4
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace

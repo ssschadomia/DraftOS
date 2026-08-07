@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# DraftOS first-boot: launch the welcome app once per user, then never again.
+set -eu
+stamp="${XDG_CONFIG_HOME:-$HOME/.config}/draftos"
+mkdir -p "$stamp"
+[ -e "$stamp/.first-boot-done" ] && exit 0
+touch "$stamp/.first-boot-done"
+exec draftos-welcome

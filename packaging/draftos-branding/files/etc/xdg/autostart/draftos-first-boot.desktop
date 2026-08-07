@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DraftOS First Boot
+Comment=Welcome to DraftOS
+Exec=draftos-first-boot
+OnlyShowIn=COSMIC;
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
