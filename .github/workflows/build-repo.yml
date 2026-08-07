@@ -97,6 +97,9 @@ jobs:
           fi
           # sync keeps the prefix bounded (old package versions drop out) —
           # storage stays inside the R2 free tier.
-          rclone sync "$SRC" "r2:${BUCKET}/repo/x86_64" \
+          # --copy-links: repo-add makes draftos.db / draftos.files SYMLINKS to
+          # the .tar.zst; object storage has no symlinks, so upload them as real
+          # objects (pacman requests draftos.db by that exact name).
+          rclone sync -L "$SRC" "r2:${BUCKET}/repo/x86_64" \
             --s3-no-check-bucket --transfers 8 --checkers 16
           rclone size "r2:${BUCKET}" || true
