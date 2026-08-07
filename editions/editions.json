@@ -1,15 +1,16 @@
 {
-  "$comment": "DraftOS editions manifest — consumed by the Media Writer to list downloadable editions. Update version/url/size/sha256 when a release is published.",
+  "$comment": "DraftOS editions manifest — consumed by the Media Writer to list downloadable editions. When a release is published: set available=true, and fill url/size/sha256 to the real asset. Do NOT set available=true before the GitHub Release exists (the download would 404).",
+  "schema_version": 1,
   "editions": [
     {
       "id": "desktop",
       "name": "Desktop",
-      "description": "Classic desktops and laptops. Mutable Arch base, CachyOS-tuned, COSMIC.",
+      "description": "Classic desktops and laptops. Mutable Arch base, COSMIC. First public image in progress.",
       "arch": "x86_64",
       "version": "2026.08.06",
-      "available": true,
-      "url": "https://github.com/ssschadomia/DraftOS/releases/download/v2026.08.06/draftos-desktop-2026.08.06-x86_64.iso",
-      "size": 1990000000,
+      "available": false,
+      "url": "",
+      "size": 0,
       "sha256": ""
     },
     {

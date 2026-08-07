@@ -40,7 +40,9 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           mkdir -p dist/iso
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist/iso --pattern '*' || true
+          # No '|| true': a failed download must fail the job, never proceed to
+          # sync an empty dir (which would DELETE every published ISO).
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist/iso --pattern '*'
 
       - name: Configure rclone for R2
         run: |
@@ -63,6 +65,20 @@ jobs:
             SRC="dist/iso"; PREFIX="iso"
           else
             SRC="${{ github.event.inputs.source_dir }}"; PREFIX="${{ github.event.inputs.prefix }}"
+          fi
+          # Guard: `rclone sync` makes the destination MATCH the source, so an
+          # empty/missing SRC would wipe the whole prefix. Refuse that. (The
+          # manual-dispatch path has no checkout step, so its default 'dist' is
+          # exactly this case.)
+          if [ ! -d "$SRC" ] || [ -z "$(ls -A "$SRC" 2>/dev/null)" ]; then
+            echo "::error::source '$SRC' is empty or missing — refusing to sync (would delete r2:$BUCKET/$PREFIX)"
+            exit 1
+          fi
+          # A non-empty PREFIX is required for the destructive sync, so a mistake
+          # can never mirror an empty root over the entire bucket.
+          if [ -z "$PREFIX" ]; then
+            echo "::error::a remote prefix is required (refusing to sync the bucket root)"
+            exit 1
           fi
           echo ">> uploading $SRC -> r2:$BUCKET/$PREFIX"
           # 'sync' (not copy) mirrors the prefix, so old releases don't accumulate
