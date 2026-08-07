@@ -91,11 +91,13 @@ pub fn kernel_cmdline(root_uuid: &str, encrypted: bool) -> String {
 }
 
 /// The `mkinitcpio` HOOKS line. `plymouth` (right after `udev`) drives the boot
-/// splash; for LUKS we use `plymouth-encrypt` so the passphrase prompt is drawn
-/// by Plymouth rather than on the bare console.
+/// splash. For LUKS the standard `encrypt` hook is used — since mkinitcpio 30+
+/// it detects a running Plymouth and asks for the passphrase through it, and the
+/// old separate `plymouth-encrypt` hook no longer exists (verified: plymouth
+/// 26.x ships only `usr/lib/initcpio/hooks/plymouth`).
 pub fn mkinitcpio_hooks(encrypted: bool) -> String {
     if encrypted {
-        "HOOKS=(base udev plymouth autodetect microcode modconf kms keyboard keymap consolefont block plymouth-encrypt filesystems fsck)".into()
+        "HOOKS=(base udev plymouth autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)".into()
     } else {
         "HOOKS=(base udev plymouth autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)".into()
     }
@@ -141,7 +143,9 @@ mod tests {
 
     #[test]
     fn hooks_add_encrypt_only_when_needed() {
-        assert!(mkinitcpio_hooks(true).contains(" plymouth-encrypt filesystems"));
+        assert!(mkinitcpio_hooks(true).contains(" encrypt filesystems"));
+        // `plymouth-encrypt` no longer exists in plymouth 26.x — never emit it.
+        assert!(!mkinitcpio_hooks(true).contains("plymouth-encrypt"));
         assert!(!mkinitcpio_hooks(false).contains("encrypt"));
         // Plymouth splash on both paths.
         assert!(mkinitcpio_hooks(false).contains(" plymouth "));

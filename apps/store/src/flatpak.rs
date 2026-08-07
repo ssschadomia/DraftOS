@@ -39,7 +39,19 @@ pub fn updatable_ids() -> HashSet<String> {
 }
 
 /// Install `id` from Flathub into the user installation. Returns success.
+///
+/// The user installation may have no Flathub remote yet (fresh systems, or hosts
+/// where Flathub is only a filtered system remote), so the store is
+/// self-sufficient: it idempotently adds the user-level Flathub remote first.
 pub async fn install(id: &str) -> bool {
+    let _ = run(&[
+        "remote-add",
+        "--user",
+        "--if-not-exists",
+        "flathub",
+        "https://dl.flathub.org/repo/flathub.flatpakrepo",
+    ])
+    .await;
     run(&["install", "--user", "--noninteractive", "--assumeyes", "flathub", id]).await
 }
 
