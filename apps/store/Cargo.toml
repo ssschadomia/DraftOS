@@ -1,0 +1,26 @@
+[package]
+name = "draftos-store"
+description = "DraftOS App Center — a Microsoft-Store-style catalog for Flatpak apps (libcosmic)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "draftos-store"
+path = "src/main.rs"
+
+[dependencies]
+draftos-common.workspace = true
+tokio.workspace = true
+roxmltree.workspace = true
+flate2.workspace = true
+libcosmic = { workspace = true, features = [
+    "winit",
+    "tokio",
+    "xdg-portal",
+    "single-instance",
+    "wgpu",
+    "wayland",
+] }

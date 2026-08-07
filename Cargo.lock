@@ -1406,6 +1406,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "draftos-store"
+version = "0.1.0"
+dependencies = [
+ "draftos-common",
+ "flate2",
+ "libcosmic",
+ "roxmltree",
+ "tokio",
+]
+
+[[package]]
 name = "draftos-welcome"
 version = "0.1.0"
 dependencies = [

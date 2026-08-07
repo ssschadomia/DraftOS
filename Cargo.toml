@@ -13,10 +13,10 @@ members = [
     "apps/welcome",
     "apps/installer",
     "apps/media-writer",
+    "apps/store",
     # "crates/draftos-link",
     # "cli/draftos",
     # "cli/draftbox",
-    # "apps/store",
 ]
 
 [workspace.package]
@@ -41,6 +41,9 @@ tokio = { version = "1", features = ["process", "io-util"] }
 libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "dc1cf9f00cbe2902a52166492654bb9fee8a73d1", default-features = false }
 draftos-common = { path = "crates/draftos-common" }
 draftos-install = { path = "crates/draftos-install" }
+# App-center catalog parsing: AppStream XML (fast, zero-copy DOM) + gzip.
+roxmltree = "0.20"
+flate2 = "1"
 
 [profile.release]
 lto = "thin"
