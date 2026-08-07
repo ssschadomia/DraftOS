@@ -36,7 +36,7 @@ fn packages(req: &InstallRequest) -> Vec<&'static str> {
         // (mirrors what the live ISO ships so the installed system matches).
         "cosmic-session", "cosmic-greeter", "xdg-desktop-portal-cosmic",
         "cosmic-settings", "cosmic-files", "cosmic-terminal",
-        "cosmic-text-editor", "cosmic-store", "cosmic-wallpapers",
+        "cosmic-text-editor", "cosmic-wallpapers",
         // graphics stack + keyboard maps for a usable desktop on real hardware
         "mesa", "vulkan-intel", "vulkan-radeon", "vulkan-icd-loader",
         "xorg-xwayland", "xkeyboard-config",
@@ -142,6 +142,17 @@ pub fn plan(req: &InstallRequest) -> anyhow::Result<Vec<Step>> {
     pacstrap.extend(pkgs.iter().copied());
     steps.push(Step::run(Phase::BaseSystem, "Install base system + COSMIC", &pacstrap));
     steps.push(Step::sh(Phase::BaseSystem, "Generate fstab", "genfstab -U /mnt >> /mnt/etc/fstab"));
+
+    // --- DraftOS layer (our signed repo → the draftos-core metapackage) ---
+    // This is what makes the installed system *DraftOS* — branding, first-party
+    // apps — and gives users updates to the whole layer via `pacman -Syu`.
+    steps.push(Step::write(Phase::BaseSystem, "Temporary resolver", "/etc/resolv.conf", files::install_resolv_conf(), 0o644));
+    steps.push(Step::write(Phase::BaseSystem, "DraftOS signing key", "/etc/pacman.d/draftos-packaging.asc", files::packaging_pubkey().to_string(), 0o644));
+    steps.push(Step::chroot(Phase::BaseSystem, "Initialize pacman keyring", &["pacman-key", "--init"]));
+    steps.push(Step::chroot(Phase::BaseSystem, "Import DraftOS key", &["pacman-key", "--add", "/etc/pacman.d/draftos-packaging.asc"]));
+    steps.push(Step::chroot(Phase::BaseSystem, "Trust DraftOS key", &["pacman-key", "--lsign-key", files::DRAFTOS_KEY_ID]));
+    steps.push(Step::sh(Phase::BaseSystem, "Add DraftOS repository", format!("cat >> /mnt/etc/pacman.conf <<'DRAFTOSEOF'{}DRAFTOSEOF", files::draftos_repo_stanza())));
+    steps.push(Step::chroot(Phase::BaseSystem, "Install the DraftOS layer", &["pacman", "-Sy", "--noconfirm", "draftos-core"]));
 
     // --- Configure ---
     steps.push(Step::write(Phase::Configure, "Locale", "/etc/locale.gen", files::locale_gen_line(&req.locale), 0o644));

@@ -4,6 +4,34 @@
 //! easy to unit-test. Anything that depends on values only known at run time
 //! (partition UUIDs, etc.) lives in [`crate::plan`] as executed steps instead.
 
+/// The DraftOS pacman repository, served from Cloudflare R2 (egress-free CDN).
+/// `$arch` is expanded by pacman itself, so it stays literal here.
+pub const DRAFTOS_REPO_URL: &str =
+    "https://pub-a895d58bfaca4ab49dfcee8b9bb5604f.r2.dev/repo/$arch";
+
+/// Fingerprint of the DraftOS package-signing key (its public half is embedded
+/// via [`packaging_pubkey`]). Used to locally sign (trust) the key in the target
+/// keyring so pacman accepts our signed packages.
+pub const DRAFTOS_KEY_ID: &str = "8D33B2461848D54797DFD0CFC386D8413641AD97";
+
+/// The DraftOS packaging public key (ASCII-armored), embedded at build time.
+pub fn packaging_pubkey() -> &'static str {
+    include_str!("../../../packaging/keyring/draftos-packaging.asc")
+}
+
+/// The `[draftos]` stanza appended to the target `pacman.conf`. `SigLevel`
+/// requires package signatures (our key) but treats the db signature as
+/// optional, matching how `repo-add` signs.
+pub fn draftos_repo_stanza() -> String {
+    format!("\n[draftos]\nSigLevel = Required DatabaseOptional\nServer = {DRAFTOS_REPO_URL}\n")
+}
+
+/// A minimal resolver used only during install so the chroot's pacman can reach
+/// the network. NetworkManager rewrites `/etc/resolv.conf` on first boot.
+pub fn install_resolv_conf() -> String {
+    "nameserver 1.1.1.1\nnameserver 9.9.9.9\n".to_string()
+}
+
 /// `/etc/locale.conf`.
 pub fn locale_conf(locale: &str) -> String {
     format!("LANG={locale}\n")
