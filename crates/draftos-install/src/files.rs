@@ -111,6 +111,44 @@ pub fn zram_conf() -> String {
     "[zram0]\nzram-size = min(ram / 2, 4096)\ncompression-algorithm = zstd\n".to_string()
 }
 
+/// `/etc/snapper/configs/root` — written directly rather than via
+/// `snapper create-config`, because our btrfs layout already provides the
+/// `@snapshots` subvolume mounted at `/.snapshots` (create-config would refuse).
+/// Timeline auto-snapshots are off; snapshots come from pacman (snap-pac) and
+/// `draftos update`, which is what `draftos rollback` restores.
+pub fn snapper_root_config() -> String {
+    "SUBVOLUME=\"/\"\n\
+     FSTYPE=\"btrfs\"\n\
+     QGROUP=\"\"\n\
+     SPACE_LIMIT=\"0.5\"\n\
+     FREE_LIMIT=\"0.2\"\n\
+     ALLOW_USERS=\"\"\n\
+     ALLOW_GROUPS=\"\"\n\
+     SYNC_ACL=\"no\"\n\
+     BACKGROUND_COMPARISON=\"yes\"\n\
+     NUMBER_CLEANUP=\"yes\"\n\
+     NUMBER_MIN_AGE=\"1800\"\n\
+     NUMBER_LIMIT=\"50\"\n\
+     NUMBER_LIMIT_IMPORTANT=\"10\"\n\
+     TIMELINE_CREATE=\"no\"\n\
+     TIMELINE_CLEANUP=\"yes\"\n\
+     TIMELINE_MIN_AGE=\"1800\"\n\
+     TIMELINE_LIMIT_HOURLY=\"5\"\n\
+     TIMELINE_LIMIT_DAILY=\"7\"\n\
+     TIMELINE_LIMIT_WEEKLY=\"0\"\n\
+     TIMELINE_LIMIT_MONTHLY=\"0\"\n\
+     TIMELINE_LIMIT_YEARLY=\"0\"\n\
+     EMPTY_PRE_POST_CLEANUP=\"yes\"\n\
+     EMPTY_PRE_POST_MIN_AGE=\"1800\"\n"
+        .to_string()
+}
+
+/// `/etc/conf.d/snapper` — registers the `root` config so the snapper timers act
+/// on it.
+pub fn snapper_conf_d() -> String {
+    "SNAPPER_CONFIGS=\"root\"\n".to_string()
+}
+
 /// `systemd-boot` `loader/loader.conf`.
 pub fn loader_conf() -> String {
     "default draftos.conf\ntimeout 3\nconsole-mode max\neditor no\n".to_string()

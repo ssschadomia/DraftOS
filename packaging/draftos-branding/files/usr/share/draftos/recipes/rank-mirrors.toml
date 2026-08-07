@@ -1,0 +1,6 @@
+description = "Refresh and rank the fastest HTTPS Arch mirrors (reflector)"
+root = true
+commands = [
+  "reflector --latest 20 --sort rate --protocol https --save /etc/pacman.d/mirrorlist",
+  "echo 'Mirrorlist updated.'",
+]

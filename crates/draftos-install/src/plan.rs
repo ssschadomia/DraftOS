@@ -168,6 +168,11 @@ pub fn plan(req: &InstallRequest) -> anyhow::Result<Vec<Step>> {
     steps.push(Step::chroot(Phase::Configure, "Sync hardware clock", &["hwclock", "--systohc"]));
     steps.push(Step::write(Phase::Configure, "DraftOS identity", "/etc/os-release", files::os_release(), 0o644));
     steps.push(Step::write(Phase::Configure, "Swap on zram", "/etc/systemd/zram-generator.conf", files::zram_conf(), 0o644));
+    // Snapshot support (for `draftos rollback`): write the snapper config
+    // directly — our @snapshots subvolume is already mounted at /.snapshots, so
+    // `snapper create-config` would refuse.
+    steps.push(Step::write(Phase::Configure, "Snapshot config", "/etc/snapper/configs/root", files::snapper_root_config(), 0o644));
+    steps.push(Step::write(Phase::Configure, "Register snapshot config", "/etc/conf.d/snapper", files::snapper_conf_d(), 0o644));
     steps.push(Step::write(Phase::Configure, "Boot splash theme", "/etc/plymouth/plymouthd.conf", files::plymouthd_conf(), 0o644));
     steps.push(Step::sh(Phase::Configure, "Set mkinitcpio hooks", format!("sed -i 's/^HOOKS=.*/{}/' /mnt/etc/mkinitcpio.conf", files::mkinitcpio_hooks(encrypted))));
     steps.push(Step::chroot(Phase::Configure, "Build initramfs", &["mkinitcpio", "-P"]));
@@ -191,7 +196,7 @@ pub fn plan(req: &InstallRequest) -> anyhow::Result<Vec<Step>> {
         RootPolicy::Separate(p) => steps.push(Step::chroot_secret(Phase::Users, "Set root password", &["chpasswd"], Secret(format!("root:{}", p.expose())))),
         RootPolicy::Locked => steps.push(Step::chroot(Phase::Users, "Lock root account", &["passwd", "-l", "root"])),
     }
-    steps.push(Step::chroot(Phase::Users, "Enable services", &["systemctl", "enable", "NetworkManager", "cosmic-greeter", "systemd-timesyncd", "fstrim.timer", "bluetooth", "power-profiles-daemon"]));
+    steps.push(Step::chroot(Phase::Users, "Enable services", &["systemctl", "enable", "NetworkManager", "cosmic-greeter", "systemd-timesyncd", "fstrim.timer", "bluetooth", "power-profiles-daemon", "snapper-timeline.timer", "snapper-cleanup.timer"]));
     // Flathub for the App Center (system-wide; arch-chroot binds resolv.conf so
     // the .flatpakrepo fetch works). Best-effort: a failure here must not waste
     // the whole install — the App Center can also self-provision later.

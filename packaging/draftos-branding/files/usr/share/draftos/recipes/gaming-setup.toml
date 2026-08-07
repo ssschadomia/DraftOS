@@ -1,0 +1,6 @@
+description = "Enable multilib and install the gaming stack (Steam, Gamescope, GameMode, MangoHud)"
+root = true
+commands = [
+  "grep -q '^\\[multilib\\]' /etc/pacman.conf || printf '\\n[multilib]\\nInclude = /etc/pacman.d/mirrorlist\\n' >> /etc/pacman.conf",
+  "pacman -Sy --needed --noconfirm steam gamescope gamemode mangohud lib32-mangohud",
+]

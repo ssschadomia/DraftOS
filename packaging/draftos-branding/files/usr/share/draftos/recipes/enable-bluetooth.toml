@@ -1,0 +1,5 @@
+description = "Enable and start the Bluetooth service"
+root = true
+commands = [
+  "systemctl enable --now bluetooth.service",
+]

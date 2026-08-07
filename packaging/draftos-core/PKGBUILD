@@ -34,11 +34,16 @@ depends=(
     'bluez'
     'bluez-utils'
     'power-profiles-daemon'
-    # filesystem tooling + boot
+    # filesystem tooling + boot + snapshots (draftos update/rollback)
     'btrfs-progs'
     'snapper'
+    'snap-pac'
     'zram-generator'
     'efibootmgr'
+    # `draftos` CLI + recipe backends
+    'pacman-contrib'
+    'reflector'
+    'fwupd'
     # graphics + input maps
     'mesa'
     'vulkan-intel'

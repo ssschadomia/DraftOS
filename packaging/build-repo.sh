@@ -39,18 +39,19 @@ podman run --rm \
         # makepkg refuses to run as root; work under an unprivileged user.
         useradd -m -s /bin/bash builder 2>/dev/null || true
 
-        echo "== compile first-party apps (release) =="
+        echo "== compile first-party apps + CLI (release) =="
         # Keep the host workspace target/ clean: build into a container-local dir.
         export CARGO_TARGET_DIR=/tmp/draftos-target
         cargo build --release \
-            -p draftos-welcome -p draftos-store -p draftos-media-writer
+            -p draftos-welcome -p draftos-store -p draftos-media-writer -p draftos-cli
 
         echo "== stage draftos-apps payload =="
         P=/src/packaging/draftos-apps/payload
         rm -rf "$P"; mkdir -p "$P/bin" "$P/desktop" "$P/icons"
         cp "$CARGO_TARGET_DIR"/release/draftos-welcome \
            "$CARGO_TARGET_DIR"/release/draftos-store \
-           "$CARGO_TARGET_DIR"/release/draftos-media-writer "$P/bin/"
+           "$CARGO_TARGET_DIR"/release/draftos-media-writer \
+           "$CARGO_TARGET_DIR"/release/draftos "$P/bin/"
         # Ship every app EXCEPT the installer (that belongs to the live ISO).
         for d in /src/apps/*/data/*.desktop; do cp "$d" "$P/desktop/"; done
         for i in /src/apps/*/data/*.svg;     do cp "$i" "$P/icons/";   done
@@ -80,9 +81,14 @@ podman run --rm \
         cd "$REPO"
         su builder -c "cd $REPO && repo-add ${SIGN:+--sign --key ${GPG_KEYID}} draftos.db.tar.zst *.pkg.tar.zst"
 
-        # Clean the staged payload so it never lands in git.
+        # Clean the staged payload + makepkg scratch so nothing lands in git.
         rm -rf /src/packaging/draftos-apps/payload
-        chown -R "$(stat -c %u /src/packaging):$(stat -c %g /src/packaging)" /src/packaging/out
+        rm -rf /src/packaging/draftos-*/src /src/packaging/draftos-*/pkg
+
+        # Restore host ownership: `chown -R builder` above made everything owned
+        # by a subuid on the host. Inside this rootless-podman userns, uid 0 maps
+        # back to the invoking host user, so this hands the whole tree back.
+        chown -R 0:0 /src/packaging
     '
 
 echo

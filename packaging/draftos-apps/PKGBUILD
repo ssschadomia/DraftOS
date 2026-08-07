@@ -1,20 +1,25 @@
 # Maintainer: DraftOS <https://github.com/ssschadomia/DraftOS>
 #
 # The DraftOS first-party apps for an installed system: Hello (onboarding),
-# App Center (Flatpak storefront) and Media Writer. The release binaries and
-# their desktop/icon assets are staged into ./payload by build-repo.sh before
-# makepkg runs — this package ships prebuilt artifacts, it does not compile.
+# App Center (Flatpak storefront), Media Writer, and the `draftos` CLI. The
+# release binaries and their desktop/icon assets are staged into ./payload by
+# build-repo.sh before makepkg runs — this package ships prebuilt artifacts, it
+# does not compile.
 #
 # The installer GUI (draftos-installer) is deliberately NOT here: it belongs to
 # the live ISO, not the installed system.
 pkgname=draftos-apps
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="DraftOS first-party apps: Hello, App Center, Media Writer"
+pkgdesc="DraftOS first-party apps: Hello, App Center, Media Writer, draftos CLI"
 arch=('x86_64')
 url="https://github.com/ssschadomia/DraftOS"
 license=('GPL-3.0-or-later')
 depends=('flatpak')
+# The `draftos` CLI shells out to these for update/rollback/recipes.
+optdepends=('snapper: snapshotted updates and rollback (draftos update/rollback)'
+            'reflector: the rank-mirrors recipe'
+            'fwupd: the update-firmware recipe')
 # Prebuilt release binaries — don't let makepkg strip/LTO them again.
 options=('!strip' '!debug' '!lto')
 
@@ -24,6 +29,7 @@ package() {
     install -Dm755 "$p/bin/draftos-welcome"      "$pkgdir/usr/bin/draftos-welcome"
     install -Dm755 "$p/bin/draftos-store"        "$pkgdir/usr/bin/draftos-store"
     install -Dm755 "$p/bin/draftos-media-writer" "$pkgdir/usr/bin/draftos-media-writer"
+    install -Dm755 "$p/bin/draftos"              "$pkgdir/usr/bin/draftos"
 
     for d in "$p"/desktop/*.desktop; do
         install -Dm644 "$d" "$pkgdir/usr/share/applications/$(basename "$d")"

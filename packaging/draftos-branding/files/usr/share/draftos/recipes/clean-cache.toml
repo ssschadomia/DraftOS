@@ -1,0 +1,6 @@
+description = "Free disk space: trim the package cache and drop unused Flatpak runtimes"
+root = true
+commands = [
+  "paccache -rk2",
+  "flatpak uninstall --unused -y || true",
+]

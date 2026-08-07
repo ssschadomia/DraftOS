@@ -1,0 +1,7 @@
+description = "Check for and apply device firmware updates (fwupd)"
+root = true
+commands = [
+  "fwupdmgr refresh --force || true",
+  "fwupdmgr get-updates || true",
+  "fwupdmgr update -y || true",
+]
