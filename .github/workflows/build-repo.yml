@@ -29,7 +29,12 @@ jobs:
       image: archlinux:base-devel
     steps:
       - name: Install toolchain
-        run: pacman -Sy --needed --noconfirm rust git rclone
+        # rust + git + rclone, plus the libcosmic build deps (smithay-client-
+        # toolkit needs xkbcommon.pc etc.) — same set the ISO builder image ships.
+        run: |
+          pacman -Sy --needed --noconfirm \
+            rust git rclone \
+            libxkbcommon wayland mesa vulkan-icd-loader fontconfig freetype2 expat
 
       - uses: actions/checkout@v4
 
