@@ -29,7 +29,7 @@ impl DriveInfo {
 /// disks are deliberately excluded so we can't offer to erase the system drive.
 pub fn detect_removable_drives() -> Vec<DriveInfo> {
     let Ok(output) = Command::new("lsblk")
-        .args(["-dn", "-P", "-o", "NAME,SIZE,TYPE,RM,HOTPLUG,TRAN,MODEL"])
+        .args(["-dn", "-P", "-o", "NAME,SIZE,TYPE,RM,TRAN,MODEL"])
         .output()
     else {
         return Vec::new();
@@ -39,9 +39,10 @@ pub fn detect_removable_drives() -> Vec<DriveInfo> {
         .lines()
         .filter_map(parse)
         .filter(|d| {
-            d.type_val == "disk"
-                && (d.rm || d.hotplug || d.tran == "usb")
-                && !is_virtual(&d.name)
+            // RM=1 (genuinely removable) or USB-attached. HOTPLUG alone is NOT
+            // enough: internal SATA disks on hotplug-capable/eSATA ports report
+            // HOTPLUG=1 and must never be offered for erasure.
+            d.type_val == "disk" && (d.rm || d.tran == "usb") && !is_virtual(&d.name)
         })
         .map(|d| DriveInfo { name: d.name, size: d.size, model: d.model })
         .collect()
@@ -57,7 +58,6 @@ struct Row {
     model: String,
     type_val: String,
     rm: bool,
-    hotplug: bool,
     tran: String,
 }
 
@@ -66,7 +66,7 @@ fn parse(line: &str) -> Option<Row> {
     let mut name = None;
     let (mut size, mut model, mut type_val, mut tran) =
         (String::new(), String::new(), String::new(), String::new());
-    let (mut rm, mut hotplug) = (false, false);
+    let mut rm = false;
 
     for token in split_pairs(line) {
         let (key, value) = token.split_once('=')?;
@@ -78,11 +78,10 @@ fn parse(line: &str) -> Option<Row> {
             "MODEL" => model = value.trim().to_string(),
             "TRAN" => tran = value,
             "RM" => rm = value == "1",
-            "HOTPLUG" => hotplug = value == "1",
             _ => {}
         }
     }
-    Some(Row { name: name?, size, model, type_val, rm, hotplug, tran })
+    Some(Row { name: name?, size, model, type_val, rm, tran })
 }
 
 /// Split a `-P` line into `KEY="value"` tokens, respecting quoted spaces.

@@ -8,7 +8,10 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// Ids of every installed app (user + system).
+/// Ids of every installed app (user + system). These are true flatpak ids —
+/// compare them against [`crate::model::App::flatpak_id`] (parsed from the
+/// AppStream `<bundle>`), never against the raw component id: ~155 legacy
+/// components carry a `.desktop` suffix their flatpak ref doesn't have.
 pub fn installed_ids() -> HashSet<String> {
     let out = std::process::Command::new("flatpak")
         .args(["list", "--app", "--columns=application"])
@@ -23,27 +26,29 @@ pub fn installed_ids() -> HashSet<String> {
     }
 }
 
-/// Ids that have an update available on their remote (needs network; may be slow).
-pub fn updatable_ids() -> HashSet<String> {
+/// Ids with an update available (needs network; may take seconds). `Err` means
+/// the check itself failed — callers must NOT render that as "up to date".
+pub fn updatable_ids() -> Result<HashSet<String>, String> {
     let out = std::process::Command::new("flatpak")
         .args(["remote-ls", "--updates", "--app", "--columns=application"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect(),
-        _ => HashSet::new(),
+        .output()
+        .map_err(|e| format!("could not run flatpak: {e}"))?;
+    if !out.status.success() {
+        return Err(last_line(&out.stderr, "the update check failed"));
     }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect())
 }
 
-/// Install `id` from Flathub into the user installation. Returns success.
+/// Install `id` from Flathub into the user installation.
 ///
 /// The user installation may have no Flathub remote yet (fresh systems, or hosts
 /// where Flathub is only a filtered system remote), so the store is
 /// self-sufficient: it idempotently adds the user-level Flathub remote first.
-pub async fn install(id: &str) -> bool {
+pub async fn install(id: &str) -> Result<(), String> {
     let _ = run(&[
         "remote-add",
         "--user",
@@ -55,23 +60,37 @@ pub async fn install(id: &str) -> bool {
     run(&["install", "--user", "--noninteractive", "--assumeyes", "flathub", id]).await
 }
 
-/// Uninstall `id` (user installation). Returns success.
-pub async fn uninstall(id: &str) -> bool {
-    run(&["uninstall", "--user", "--noninteractive", "--assumeyes", id]).await
+/// Uninstall `id`, wherever it is installed (`flatpak` resolves the installation).
+pub async fn uninstall(id: &str) -> Result<(), String> {
+    run(&["uninstall", "--noninteractive", "--assumeyes", id]).await
 }
 
-/// Update `id` (user installation). Returns success.
-pub async fn update(id: &str) -> bool {
-    run(&["update", "--user", "--noninteractive", "--assumeyes", id]).await
+/// Update `id` (any installation).
+pub async fn update(id: &str) -> Result<(), String> {
+    run(&["update", "--noninteractive", "--assumeyes", id]).await
 }
 
-async fn run(args: &[&str]) -> bool {
-    tokio::process::Command::new("flatpak")
+/// Run `flatpak` with `args`; on failure return the most relevant stderr line.
+async fn run(args: &[&str]) -> Result<(), String> {
+    let out = tokio::process::Command::new("flatpak")
         .args(args)
-        .status()
+        .output()
         .await
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .map_err(|e| format!("could not run flatpak: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(last_line(&out.stderr, "the operation failed"))
+    }
+}
+
+fn last_line(stderr: &[u8], fallback: &str) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 /// Launch an installed app, detached. Fire-and-forget.
@@ -80,7 +99,7 @@ pub fn launch(id: &str) {
 }
 
 /// Download a screenshot to the on-disk cache, returning its local path. Cached
-/// hits skip the network.
+/// hits skip the network. `--fail` keeps HTTP error pages out of the cache.
 pub async fn fetch_screenshot(url: String) -> Option<PathBuf> {
     let path = cache_path(&url);
     if path.exists() {
@@ -90,7 +109,7 @@ pub async fn fetch_screenshot(url: String) -> Option<PathBuf> {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
     let ok = tokio::process::Command::new("curl")
-        .args(["-sL", "--max-time", "25", "-o"])
+        .args(["-sfL", "--max-time", "25", "-o"])
         .arg(&path)
         .arg(&url)
         .status()
@@ -100,6 +119,8 @@ pub async fn fetch_screenshot(url: String) -> Option<PathBuf> {
     if ok && path.exists() {
         Some(path)
     } else {
+        // Never leave a partial/failed body behind to poison the cache.
+        let _ = tokio::fs::remove_file(&path).await;
         None
     }
 }

@@ -13,20 +13,22 @@ use roxmltree::Node;
 
 use crate::model::App;
 
-/// The parsed catalog plus an id index.
+/// The parsed catalog plus id indexes (AppStream component id and flatpak id).
 #[derive(Debug)]
 pub struct Catalog {
     pub apps: Vec<App>,
     by_id: HashMap<String, usize>,
+    by_flatpak: HashMap<String, usize>,
 }
 
 impl Catalog {
-    pub fn get(&self, id: &str) -> Option<&App> {
-        self.by_id.get(id).map(|&i| &self.apps[i])
-    }
-
     pub fn index_of(&self, id: &str) -> Option<usize> {
         self.by_id.get(id).copied()
+    }
+
+    /// Look up by the true flatpak id — what `flatpak list` reports.
+    pub fn index_of_flatpak(&self, flatpak_id: &str) -> Option<usize> {
+        self.by_flatpak.get(flatpak_id).copied()
     }
 
     /// Indices of apps in any of the given AppStream categories, art-first then A→Z.
@@ -76,7 +78,12 @@ pub fn load() -> Result<Catalog, String> {
         .enumerate()
         .map(|(i, a)| (a.id.clone(), i))
         .collect();
-    Ok(Catalog { apps, by_id })
+    let by_flatpak = apps
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.flatpak_id.clone(), i))
+        .collect();
+    Ok(Catalog { apps, by_id, by_flatpak })
 }
 
 /// Find the `active` catalog dir of a configured remote (Flathub preferred).
@@ -185,8 +192,20 @@ fn parse_component(node: Node, icons: &Path) -> Option<App> {
     let icon = resolve_icon(&id, icons);
     let screenshots = collect_screenshots(node);
 
+    // The flatpak ref id comes from `<bundle>app/<id>/<arch>/<branch></bundle>`.
+    // ~155 legacy components have an AppStream id with a `.desktop` suffix the
+    // ref doesn't carry — installing by component id would fail for all of them.
+    let flatpak_id = node
+        .children()
+        .find(|n| n.has_tag_name("bundle"))
+        .and_then(|b| b.text())
+        .and_then(|t| t.split('/').nth(1))
+        .map(str::to_string)
+        .unwrap_or_else(|| id.clone());
+
     Some(App {
         id,
+        flatpak_id,
         name,
         summary,
         description,
@@ -220,28 +239,33 @@ fn description_text(desc: Node) -> String {
     let mut out = String::new();
     for child in desc.children() {
         if child.has_tag_name("p") && is_default_lang(&child) {
-            if let Some(t) = child.text() {
-                let t = normalize(t);
-                if !t.is_empty() {
-                    out.push_str(&t);
-                    out.push_str("\n\n");
-                }
+            let t = normalize(&inner_text(child));
+            if !t.is_empty() {
+                out.push_str(&t);
+                out.push_str("\n\n");
             }
         } else if (child.has_tag_name("ul") || child.has_tag_name("ol")) && is_default_lang(&child) {
             for li in child.children().filter(|n| n.has_tag_name("li")) {
-                if let Some(t) = li.text() {
-                    let t = normalize(t);
-                    if !t.is_empty() {
-                        out.push_str("•  ");
-                        out.push_str(&t);
-                        out.push('\n');
-                    }
+                let t = normalize(&inner_text(li));
+                if !t.is_empty() {
+                    out.push_str("•  ");
+                    out.push_str(&t);
+                    out.push('\n');
                 }
             }
             out.push('\n');
         }
     }
     out.trim().to_string()
+}
+
+/// All descendant text of a node, concatenated. `Node::text()` returns only the
+/// text before the first child element, so a paragraph like
+/// `Great <em>free</em> editor` would otherwise lose everything from `free` on.
+fn inner_text(node: Node) -> String {
+    node.descendants()
+        .filter_map(|n| n.text())
+        .collect::<String>()
 }
 
 /// Collapse internal whitespace/newlines from wrapped XML text into one line.

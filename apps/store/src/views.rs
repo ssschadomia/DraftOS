@@ -10,17 +10,50 @@ use crate::app::{Message, Shot, Store};
 use crate::model::{self, App, SECTIONS};
 
 const CARD_W: f32 = 200.0;
-const SHELF_COLS: usize = 4;
-const GRID_COLS: usize = 4;
+/// How many cards a Home shelf shows (a wrapping flex row caps it visually too).
+const SHELF_COLS: usize = 5;
+/// Screenshots and wide cards scale to the window but never exceed this.
+const CONTENT_MAX: f32 = 760.0;
+/// The page content is capped to this width and centred, so on a wide window
+/// the shelves fill their row instead of leaving a lopsided gap on the right
+/// (5 cards × 200 + gaps + padding ≈ this). Narrower windows use full width and
+/// the flex rows wrap.
+const PAGE_MAX: f32 = 1128.0;
 
 /// Full-page centered loading state while the catalog parses.
 pub fn loading<'a>() -> Element<'a, Message> {
+    loading_msg("Loading the App Center…", "Reading the Flathub catalog")
+}
+
+/// Full-page centered loading state with a custom message.
+pub fn loading_msg<'a>(title: &'a str, body: &'a str) -> Element<'a, Message> {
     center(
         widget::column::with_capacity(2)
             .spacing(12)
             .align_x(Alignment::Center)
-            .push(widget::text::title2("Loading the App Center…"))
-            .push(widget::text::body("Reading the Flathub catalog")),
+            .push(widget::text::title2(title.to_string()))
+            .push(widget::text::body(body.to_string())),
+    )
+}
+
+/// Shown when the catalog is missing (a fresh system that never synced it):
+/// offer to provision Flathub and pull the catalog, rather than dead-ending.
+pub fn bootstrap_page<'a>(err: &'a str) -> Element<'a, Message> {
+    center(
+        widget::column::with_capacity(4)
+            .spacing(16)
+            .max_width(520.0)
+            .align_x(Alignment::Center)
+            .push(widget::text::title2("Set up the App Center"))
+            .push(
+                widget::text::body(
+                    "The Flathub app catalog isn't available yet. Set it up now to \
+                     browse and install thousands of apps.",
+                )
+                .center(),
+            )
+            .push(widget::button::suggested("Set up the App Center").on_press(Message::Bootstrap))
+            .push(widget::text::caption(err.to_string())),
     )
 }
 
@@ -114,15 +147,10 @@ fn shelf<'a>(
         );
     }
 
-    let mut row = widget::row::with_capacity(indices.len()).spacing(16);
-    for &i in indices {
-        row = row.push(app_card(store, i));
-    }
-
     widget::column::with_capacity(2)
         .spacing(14)
         .push(header)
-        .push(row)
+        .push(grid(store, indices))
         .into()
 }
 
@@ -153,17 +181,14 @@ pub fn section<'a>(store: &'a Store, key: &'a str) -> Element<'a, Message> {
     scroll(col)
 }
 
-/// A wrapping grid of cards laid out as fixed-width rows.
+/// A responsive grid of fixed-width cards — `flex_row` wraps them to as many
+/// columns as the current window width allows, so nothing is ever clipped.
 fn grid<'a>(store: &'a Store, indices: &[usize]) -> Element<'a, Message> {
-    let mut col = widget::column::with_capacity(indices.len() / GRID_COLS + 1).spacing(16);
-    for chunk in indices.chunks(GRID_COLS) {
-        let mut row = widget::row::with_capacity(GRID_COLS).spacing(16);
-        for &i in chunk {
-            row = row.push(app_card(store, i));
-        }
-        col = col.push(row);
-    }
-    col.into()
+    let cards: Vec<Element<'a, Message>> = indices.iter().map(|&i| app_card(store, i)).collect();
+    widget::flex_row(cards)
+        .spacing(16)
+        .justify_items(Alignment::Start)
+        .into()
 }
 
 // -------------------------------------------------------------- Search --------
@@ -200,7 +225,8 @@ pub fn library(store: &Store) -> Element<'_, Message> {
 
     let mut list = widget::column::with_capacity(ids.len()).spacing(8);
     for id in ids {
-        list = list.push(match cat.index_of(id) {
+        // `id` is a true flatpak id (from `flatpak list`); match on that index.
+        list = list.push(match cat.index_of_flatpak(id) {
             Some(idx) => installed_row(store, idx),
             None => unknown_row(store, id),
         });
@@ -213,8 +239,8 @@ fn installed_row(store: &Store, idx: usize) -> Element<'_, Message> {
     let app = &store.catalog().unwrap().apps[idx];
     let actions = widget::row::with_capacity(2)
         .spacing(8)
-        .push(widget::button::standard("Open").on_press(Message::Launch(app.id.clone())))
-        .push(uninstall_button(store, &app.id));
+        .push(widget::button::standard("Open").on_press(Message::Launch(app.flatpak_id.clone())))
+        .push(uninstall_button(store, &app.flatpak_id));
     list_row(app_icon(app, 44), &app.name, &app.summary, actions.into(), Some(idx))
 }
 
@@ -244,6 +270,13 @@ pub fn updates(store: &Store) -> Element<'_, Message> {
         col = col.push(widget::text::body("Checking for updates…"));
         return scroll(col);
     }
+    if let Some(e) = &store.updates_error {
+        col = col.push(error_banner(&format!("Couldn't check for updates: {e}")));
+        col = col.push(
+            widget::button::suggested("Try again").on_press(Message::CheckUpdates),
+        );
+        return scroll(col);
+    }
     let Some(set) = &store.updates else {
         col = col.push(widget::text::body("Check Flathub for newer versions."));
         col = col.push(
@@ -269,7 +302,8 @@ pub fn updates(store: &Store) -> Element<'_, Message> {
     ids.sort();
     let mut list = widget::column::with_capacity(ids.len()).spacing(8);
     for id in ids {
-        let (icon, name, summary): (Element<_>, String, String) = match cat.get(id) {
+        let app = cat.index_of_flatpak(id).map(|i| &cat.apps[i]);
+        let (icon, name, summary): (Element<_>, String, String) = match app {
             Some(a) => (app_icon(a, 44), a.name.clone(), a.summary.clone()),
             None => (
                 widget::icon::from_name("application-x-executable-symbolic").size(44).icon().into(),
@@ -337,8 +371,9 @@ pub fn detail(store: &Store, idx: usize) -> Element<'_, Message> {
                 any = true;
                 shots = shots.push(
                     widget::container(
-                        widget::image(ImageHandle::from_path(path)).width(Length::Fixed(760.0)),
+                        widget::image(ImageHandle::from_path(path)).width(Length::Fill),
                     )
+                    .max_width(CONTENT_MAX)
                     .center_x(Length::Fill),
                 );
             }
@@ -369,27 +404,34 @@ pub fn detail(store: &Store, idx: usize) -> Element<'_, Message> {
 }
 
 fn action_column<'a>(store: &'a Store, app: &'a App) -> Element<'a, Message> {
-    let installed = store.installed.contains(&app.id);
-    let busy = store.busy.contains(&app.id);
+    let fid = &app.flatpak_id;
+    let installed = store.installed.contains(fid);
+    let busy = store.busy.contains(fid);
 
     let primary: Element<_> = if busy {
         widget::button::standard("Working…").into()
     } else if installed {
         widget::row::with_capacity(2)
             .spacing(8)
-            .push(widget::button::suggested("Open").on_press(Message::Launch(app.id.clone())))
-            .push(uninstall_button(store, &app.id))
+            .push(widget::button::suggested("Open").on_press(Message::Launch(fid.clone())))
+            .push(uninstall_button(store, fid))
             .into()
     } else {
-        widget::button::suggested("Get").on_press(Message::Install(app.id.clone())).into()
+        widget::button::suggested("Get").on_press(Message::Install(fid.clone())).into()
     };
 
-    let mut col = widget::column::with_capacity(2)
+    let mut col = widget::column::with_capacity(3)
         .spacing(8)
         .align_x(Alignment::End)
         .push(primary);
     if let Some(v) = &app.version {
         col = col.push(widget::text::caption(format!("v{v}")));
+    }
+    // Surface the last failed op right where the user acted.
+    if let Some(e) = &store.op_error {
+        if e.starts_with(fid.as_str()) {
+            col = col.push(widget::text::caption(e.clone()));
+        }
     }
     col.into()
 }
@@ -433,7 +475,7 @@ fn app_card(store: &Store, idx: usize) -> Element<'_, Message> {
         .align_x(Alignment::Center)
         .push(app_icon(app, 88))
         .push(widget::text::heading(truncate(&app.name, 26)).center());
-    if store.installed.contains(&app.id) {
+    if store.installed.contains(&app.flatpak_id) {
         col = col.push(widget::text::caption("Installed"));
     } else {
         col = col.push(widget::text::caption(truncate(&app.summary, 48)).center());
@@ -498,11 +540,24 @@ fn list_row<'a>(
 }
 
 fn shot_placeholder<'a>(label: &'a str) -> Element<'a, Message> {
-    widget::container(widget::text::caption(label))
-        .center_x(Length::Fill)
-        .center_y(Length::Fixed(200.0))
-        .width(Length::Fixed(760.0))
-        .height(Length::Fixed(200.0))
+    widget::container(
+        widget::container(widget::text::caption(label))
+            .center_x(Length::Fill)
+            .center_y(Length::Fixed(200.0))
+            .max_width(CONTENT_MAX)
+            .width(Length::Fill)
+            .height(Length::Fixed(200.0))
+            .class(cosmic::theme::Container::Card),
+    )
+    .center_x(Length::Fill)
+    .into()
+}
+
+/// An inline error card for a recoverable failure.
+fn error_banner<'a>(msg: &str) -> Element<'a, Message> {
+    widget::container(widget::text::body(msg.to_string()))
+        .padding(16)
+        .width(Length::Fill)
         .class(cosmic::theme::Container::Card)
         .into()
 }
@@ -518,7 +573,11 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn scroll<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    widget::scrollable(content).height(Length::Fill).into()
+    // Cap the content width and centre it: balanced margins on wide windows,
+    // full width (with wrapping flex rows) on narrow ones.
+    let capped = widget::container(widget::container(content).max_width(PAGE_MAX))
+        .center_x(Length::Fill);
+    widget::scrollable(capped).height(Length::Fill).into()
 }
 
 fn center<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {

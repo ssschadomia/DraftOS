@@ -196,6 +196,9 @@ impl cosmic::Application for MediaWriter {
                     self.progress = 1.0;
                     self.step = Step::Drive;
                     self.drives = system::detect_removable_drives();
+                    // The list was just rebuilt — a stale index could point at a
+                    // different drive than the user chose.
+                    self.selected_drive = None;
                 }
                 Err(e) => {
                     self.error = Some(e);
@@ -356,7 +359,22 @@ impl MediaWriter {
                     self.progress = 0.0;
                     self.error = None;
                     self.download_total = ed.size;
-                    let dest = std::env::temp_dir()
+                    // NOT temp_dir(): /tmp is RAM-backed tmpfs on Arch/Fedora —
+                    // a ~2 GB ISO there evicts memory or fails outright. Use the
+                    // on-disk cache dir, and check free space up front.
+                    let cache = dirs_cache().join("draftos-media-writer");
+                    let _ = std::fs::create_dir_all(&cache);
+                    if let Some(free) = free_space_bytes(&cache) {
+                        if ed.size > 0 && free < ed.size + 512 * 1024 * 1024 {
+                            self.error = Some(format!(
+                                "Not enough disk space: the image needs {} and only {} is free.",
+                                human(ed.size),
+                                human(free)
+                            ));
+                            return cosmic::app::Task::none();
+                        }
+                    }
+                    let dest = cache
                         .join(format!("draftos-{}-{}.iso", ed.id, ed.version))
                         .display()
                         .to_string();
@@ -369,13 +387,23 @@ impl MediaWriter {
             Step::LocalIso => {
                 self.step = Step::Drive;
                 self.drives = system::detect_removable_drives();
+                // Fresh list — never carry a selection index across a re-detect.
+                self.selected_drive = None;
             }
             Step::Drive => {
+                // The drive list may have changed since selection (drive pulled,
+                // rescan); never index blindly.
+                let Some(drive) = self.selected_drive.and_then(|i| self.drives.get(i)) else {
+                    self.error = Some("The selected drive is no longer available — pick it again.".into());
+                    self.selected_drive = None;
+                    self.drives = system::detect_removable_drives();
+                    return cosmic::app::Task::none();
+                };
+                let dev = drive.device();
                 self.step = Step::Writing;
                 self.progress = 0.0;
                 self.error = None;
                 let iso = self.iso_path.clone();
-                let dev = self.drives[self.selected_drive.unwrap()].device();
                 return cosmic::task::future(async move {
                     Message::WriteFinished(write_iso(iso, dev).await)
                 });
@@ -645,6 +673,32 @@ async fn load_manifest(url: String) -> Result<Vec<Edition>, String> {
     Ok(manifest.editions)
 }
 
+/// `~/.cache` (or `$XDG_CACHE_HOME`) — real disk, unlike tmpfs `/tmp`.
+fn dirs_cache() -> std::path::PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            std::path::PathBuf::from(home).join(".cache")
+        })
+}
+
+/// Free bytes on the filesystem holding `path` (via `df`, no extra deps).
+fn free_space_bytes(path: &std::path::Path) -> Option<u64> {
+    let out = std::process::Command::new("df")
+        .args(["--output=avail", "-B1"])
+        .arg(path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .nth(1)?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// Download `url` to `dest` with `curl` (progress is tracked by polling the file).
 async fn download_iso(url: String, dest: String) -> Result<String, String> {
     if url.is_empty() {
@@ -663,20 +717,35 @@ async fn download_iso(url: String, dest: String) -> Result<String, String> {
 }
 
 /// Write the ISO to the device as root (pkexec prompts for authentication).
+///
+/// The desktop may have automounted the stick's partitions; writing through a
+/// mounted device corrupts the image, so they are unmounted first in the same
+/// privileged call. `$0`/`$1` are passed as arguments — no shell interpolation
+/// of the paths.
 async fn write_iso(iso: String, device: String) -> Result<(), String> {
+    let script = r#"for p in "$1"?*; do umount "$p" 2>/dev/null || true; done
+exec dd if="$0" of="$1" bs=4M conv=fsync"#;
     let output = tokio::process::Command::new("pkexec")
-        .args(["dd", &format!("if={iso}"), &format!("of={device}"), "bs=4M", "conv=fsync"])
+        .args(["bash", "-c", script, &iso, &device])
         .output()
         .await
         .map_err(|e| format!("could not start the writer: {e}"))?;
     if output.status.success() {
         Ok(())
     } else {
+        // dd ends its stderr with throughput statistics; the actual error is the
+        // last line that is NOT one of those.
         let stderr = String::from_utf8_lossy(&output.stderr);
         let last = stderr
             .lines()
             .rev()
-            .find(|l| !l.trim().is_empty())
+            .map(str::trim)
+            .find(|l| {
+                !l.is_empty()
+                    && !l.contains("records in")
+                    && !l.contains("records out")
+                    && !l.contains("copied,")
+            })
             .unwrap_or("the write did not complete (check permissions and the drive)");
         Err(last.to_string())
     }

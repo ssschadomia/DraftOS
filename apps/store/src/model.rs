@@ -5,8 +5,12 @@ use std::path::PathBuf;
 /// One installable application, distilled from an AppStream `<component>`.
 #[derive(Clone, Debug)]
 pub struct App {
-    /// Flatpak/AppStream id, e.g. `org.telegram.desktop`.
+    /// AppStream component id, e.g. `org.telegram.desktop` — keys icons and
+    /// catalog lookups. NOT always the flatpak ref id (legacy components carry a
+    /// `.desktop` suffix): use [`App::flatpak_id`] for install/compare/launch.
     pub id: String,
+    /// The true flatpak application id, parsed from the `<bundle>` ref.
+    pub flatpak_id: String,
     pub name: String,
     pub summary: String,
     /// Plain-text description (paragraphs joined, list items bulleted).

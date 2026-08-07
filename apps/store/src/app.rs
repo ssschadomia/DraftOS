@@ -37,7 +37,7 @@ pub enum Shot {
 pub enum Message {
     Loaded(Result<(Arc<Catalog>, HashSet<String>), String>),
     RefreshedInstalled(HashSet<String>),
-    UpdatesLoaded(HashSet<String>),
+    UpdatesLoaded(Result<HashSet<String>, String>),
     Search(String),
     OpenApp(usize),
     Back,
@@ -47,10 +47,14 @@ pub enum Message {
     Update(String),
     UpdateAll,
     Launch(String),
-    OpDone(String, bool),
+    OpDone(String, Result<(), String>),
     CheckUpdates,
     ShotDone(String, Option<PathBuf>),
     OpenUrl(String),
+    /// Provision Flathub + sync AppStream, then reload — used when the catalog
+    /// is missing (a freshly installed system that never synced it).
+    Bootstrap,
+    Reload,
 }
 
 pub struct Store {
@@ -58,15 +62,22 @@ pub struct Store {
     nav: nav_bar::Model,
     pub catalog: Option<Arc<Catalog>>,
     pub load_error: Option<String>,
+    /// True flatpak ids of installed apps (compare with `App::flatpak_id`).
     pub installed: HashSet<String>,
     /// `None` until first checked; then the set of ids with an update available.
     pub updates: Option<HashSet<String>>,
     pub updates_checking: bool,
+    /// The update *check* failed (network/remotes) — distinct from "no updates".
+    pub updates_error: Option<String>,
+    /// Provisioning Flathub + syncing the catalog after a missing-catalog start.
+    pub bootstrapping: bool,
+    /// The most recent failed operation, surfaced as a banner.
+    pub op_error: Option<String>,
     pub search: String,
     pub results: Vec<usize>,
     pub page: Page,
     return_to: Page,
-    /// Ids with an install/uninstall/update in flight.
+    /// Flatpak ids with an install/uninstall/update in flight.
     pub busy: HashSet<String>,
     pub shots: HashMap<String, Shot>,
 }
@@ -131,6 +142,9 @@ impl cosmic::Application for Store {
             installed: HashSet::new(),
             updates: None,
             updates_checking: false,
+            updates_error: None,
+            bootstrapping: false,
+            op_error: None,
             search: String::new(),
             results: Vec::new(),
             page: Page::Home,
@@ -178,14 +192,64 @@ impl cosmic::Application for Store {
     fn update(&mut self, message: Message) -> cosmic::app::Task<Message> {
         match message {
             Message::Loaded(Ok((cat, installed))) => {
-                self.catalog = Some(cat);
                 self.installed = installed;
+                self.load_error = None;
+                self.bootstrapping = false;
+                // Dev hook: DRAFTOS_STORE_APP=<id> opens a detail page on load so
+                // it can be previewed/screenshot without navigating.
+                let open = std::env::var("DRAFTOS_STORE_APP")
+                    .ok()
+                    .and_then(|id| cat.index_of(&id).or_else(|| cat.index_of_flatpak(&id)));
+                self.catalog = Some(cat);
+                if let Some(idx) = open {
+                    self.page = Page::Detail(idx);
+                    self.return_to = Page::Home;
+                    return self.load_shots(idx);
+                }
             }
-            Message::Loaded(Err(e)) => self.load_error = Some(e),
+            Message::Loaded(Err(e)) => {
+                self.load_error = Some(e);
+                self.bootstrapping = false;
+            }
+            Message::Bootstrap => {
+                self.bootstrapping = true;
+                self.load_error = None;
+                return cosmic::task::future(async {
+                    // Add the user Flathub remote and pull the AppStream catalog.
+                    let _ = tokio::process::Command::new("flatpak")
+                        .args([
+                            "remote-add", "--user", "--if-not-exists", "flathub",
+                            "https://dl.flathub.org/repo/flathub.flatpakrepo",
+                        ])
+                        .status()
+                        .await;
+                    let _ = tokio::process::Command::new("flatpak")
+                        .args(["update", "--user", "--appstream", "--noninteractive"])
+                        .status()
+                        .await;
+                    Message::Reload
+                });
+            }
+            Message::Reload => {
+                return cosmic::task::future(async {
+                    let res = tokio::task::spawn_blocking(|| {
+                        catalog::load().map(|c| (Arc::new(c), flatpak::installed_ids()))
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("catalog task failed: {e}")));
+                    Message::Loaded(res)
+                });
+            }
             Message::RefreshedInstalled(set) => self.installed = set,
-            Message::UpdatesLoaded(set) => {
-                self.updates = Some(set);
+            Message::UpdatesLoaded(result) => {
                 self.updates_checking = false;
+                match result {
+                    Ok(set) => {
+                        self.updates = Some(set);
+                        self.updates_error = None;
+                    }
+                    Err(e) => self.updates_error = Some(e),
+                }
             }
             Message::Search(q) => {
                 self.search = q;
@@ -197,7 +261,12 @@ impl cosmic::Application for Store {
                 }
             }
             Message::OpenApp(idx) => {
-                self.return_to = self.page.clone();
+                // A double-click delivers OpenApp twice; recording the second
+                // one would make return_to = Detail(idx) and turn Back into a
+                // self-loop.
+                if !matches!(self.page, Page::Detail(i) if i == idx) {
+                    self.return_to = self.page.clone();
+                }
                 self.page = Page::Detail(idx);
                 return self.load_shots(idx);
             }
@@ -213,17 +282,29 @@ impl cosmic::Application for Store {
             Message::Uninstall(id) => return self.op(id, Op::Uninstall),
             Message::Update(id) => return self.op(id, Op::Update),
             Message::UpdateAll => {
-                if let Some(ids) = self.updates.clone() {
-                    let tasks: Vec<_> = ids.into_iter().map(|id| self.op(id, Op::Update)).collect();
-                    return cosmic::app::Task::batch(tasks);
+                // Sequential on purpose: flatpak takes a per-installation lock,
+                // so N parallel updates would just fail against each other.
+                if let Some(set) = self.updates.clone() {
+                    let mut ids: Vec<String> =
+                        set.into_iter().filter(|id| !self.busy.contains(id)).collect();
+                    ids.sort();
+                    if ids.is_empty() {
+                        return cosmic::app::Task::none();
+                    }
+                    self.busy.extend(ids.iter().cloned());
+                    self.op_error = None;
+                    return cosmic::task::stream(update_all_stream(ids));
                 }
             }
-            Message::OpDone(id, ok) => {
+            Message::OpDone(id, result) => {
                 self.busy.remove(&id);
-                if ok {
-                    if let Some(set) = self.updates.as_mut() {
-                        set.remove(&id);
+                match result {
+                    Ok(()) => {
+                        if let Some(set) = self.updates.as_mut() {
+                            set.remove(&id);
+                        }
                     }
+                    Err(e) => self.op_error = Some(format!("{id}: {e}")),
                 }
                 // Re-read installed apps so buttons flip to the real state.
                 return cosmic::task::future(async {
@@ -252,8 +333,11 @@ impl cosmic::Application for Store {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        if self.bootstrapping {
+            return views::loading_msg("Setting up the App Center…", "Fetching the Flathub catalog");
+        }
         if let Some(err) = &self.load_error {
-            return views::message_page("Couldn't load the catalog", err);
+            return views::bootstrap_page(err);
         }
         let Some(_) = self.catalog else {
             return views::loading();
@@ -316,24 +400,29 @@ impl Store {
     }
 
     fn op(&mut self, id: String, op: Op) -> cosmic::app::Task<Message> {
+        if self.busy.contains(&id) {
+            return cosmic::app::Task::none();
+        }
         self.busy.insert(id.clone());
+        self.op_error = None;
         cosmic::task::future(async move {
-            let ok = match op {
+            let result = match op {
                 Op::Install => flatpak::install(&id).await,
                 Op::Uninstall => flatpak::uninstall(&id).await,
                 Op::Update => flatpak::update(&id).await,
             };
-            Message::OpDone(id, ok)
+            Message::OpDone(id, result)
         })
     }
 
     fn check_updates(&mut self) -> cosmic::app::Task<Message> {
         self.updates_checking = true;
+        self.updates_error = None;
         cosmic::task::future(async {
-            let set = tokio::task::spawn_blocking(flatpak::updatable_ids)
+            let result = tokio::task::spawn_blocking(flatpak::updatable_ids)
                 .await
-                .unwrap_or_default();
-            Message::UpdatesLoaded(set)
+                .unwrap_or_else(|e| Err(format!("update check crashed: {e}")));
+            Message::UpdatesLoaded(result)
         })
     }
 
@@ -357,6 +446,21 @@ impl Store {
         }
         cosmic::app::Task::batch(tasks)
     }
+}
+
+/// Update the given apps one at a time (flatpak holds a per-installation lock),
+/// emitting an [`Message::OpDone`] after each so the UI updates progressively.
+fn update_all_stream(ids: Vec<String>) -> impl cosmic::iced::futures::Stream<Item = Message> {
+    use cosmic::iced::futures::SinkExt;
+    cosmic::iced::stream::channel(
+        8,
+        move |mut output: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
+            for id in ids {
+                let result = flatpak::update(&id).await;
+                let _ = output.send(Message::OpDone(id, result)).await;
+            }
+        },
+    )
 }
 
 /// A stable key for comparing `Page`s (Detail is never a nav target).
