@@ -80,13 +80,48 @@ pub fn detect_disks() -> Vec<DiskInfo> {
         return Vec::new();
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let boot = live_boot_disk();
 
     stdout
         .lines()
         .filter_map(parse_pairs)
         .filter(|d| d.type_val == "disk" && !is_virtual(&d.name))
+        .filter(|d| Some(&d.name) != boot.as_ref())
         .map(|d| DiskInfo { name: d.name, size: d.size, model: d.model })
         .collect()
+}
+
+/// The disk the live medium itself is running from (e.g. the installer USB) —
+/// it must never be offered as an install target: `sgdisk --zap-all` on it would
+/// destroy the running system mid-install. Resolves the parent disk of
+/// `/run/archiso/bootmnt`; `None` outside a live environment.
+fn live_boot_disk() -> Option<String> {
+    let src = Command::new("findmnt")
+        .args(["-no", "SOURCE", "/run/archiso/bootmnt"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let src = String::from_utf8_lossy(&src.stdout).trim().to_string();
+    if src.is_empty() {
+        return None;
+    }
+    let pk = Command::new("lsblk")
+        .args(["-no", "PKNAME", &src])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let parent = String::from_utf8_lossy(&pk.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if parent.is_empty() {
+        // `src` may already be the whole disk (rare) — fall back to its basename.
+        src.rsplit('/').next().map(str::to_string)
+    } else {
+        Some(parent)
+    }
 }
 
 /// All installable UTF-8 locales.

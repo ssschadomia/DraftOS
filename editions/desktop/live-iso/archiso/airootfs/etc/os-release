@@ -1,0 +1,10 @@
+NAME="DraftOS"
+PRETTY_NAME="DraftOS (Live)"
+ID=draftos
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;23;147;209"
+HOME_URL="https://github.com/ssschadomia/DraftOS"
+DOCUMENTATION_URL="https://github.com/ssschadomia/DraftOS"
+BUG_REPORT_URL="https://github.com/ssschadomia/DraftOS/issues"
+LOGO=draftos

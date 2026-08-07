@@ -42,6 +42,10 @@ fn packages(req: &InstallRequest) -> Vec<&'static str> {
         "xorg-xwayland", "xkeyboard-config",
         // audio
         "pipewire", "pipewire-pulse", "pipewire-alsa", "wireplumber",
+        // bluetooth + power management (laptops are first-class hardware)
+        "bluez", "bluez-utils", "power-profiles-daemon",
+        // the App Center's backend (ADR 0006: the image must ship flatpak)
+        "flatpak",
         // fonts
         "inter-font", "ttf-jetbrains-mono", "noto-fonts", "noto-fonts-emoji",
         "ttf-dejavu",
@@ -82,6 +86,16 @@ pub fn plan(req: &InstallRequest) -> anyhow::Result<Vec<Step>> {
     let fsdev = if encrypted { "/dev/mapper/cryptroot".to_string() } else { rootpart.clone() };
 
     let mut steps = Vec::new();
+
+    // --- Preflight ---
+    // A previous failed attempt leaves /mnt mounted (six mounts deep) and the
+    // LUKS mapper open; every retry would then fail confusingly at partprobe/
+    // mkfs/luksFormat. Start every run from a clean slate, best-effort.
+    steps.push(Step::sh(
+        Phase::Partition,
+        "Clean up any previous attempt",
+        "umount -R /mnt 2>/dev/null || true; cryptsetup close cryptroot 2>/dev/null || true",
+    ));
 
     // --- Partition (whole-disk only) ---
     if let Some(disk) = &whole_disk {
@@ -141,6 +155,8 @@ pub fn plan(req: &InstallRequest) -> anyhow::Result<Vec<Step>> {
     steps.push(Step::write(Phase::Configure, "Hosts", "/etc/hosts", files::hosts_file(&req.hostname), 0o644));
     steps.push(Step::chroot(Phase::Configure, "Set time zone", &["ln", "-sf", &format!("/usr/share/zoneinfo/{}", req.timezone), "/etc/localtime"]));
     steps.push(Step::chroot(Phase::Configure, "Sync hardware clock", &["hwclock", "--systohc"]));
+    steps.push(Step::write(Phase::Configure, "DraftOS identity", "/etc/os-release", files::os_release(), 0o644));
+    steps.push(Step::write(Phase::Configure, "Swap on zram", "/etc/systemd/zram-generator.conf", files::zram_conf(), 0o644));
     steps.push(Step::write(Phase::Configure, "Boot splash theme", "/etc/plymouth/plymouthd.conf", files::plymouthd_conf(), 0o644));
     steps.push(Step::sh(Phase::Configure, "Set mkinitcpio hooks", format!("sed -i 's/^HOOKS=.*/{}/' /mnt/etc/mkinitcpio.conf", files::mkinitcpio_hooks(encrypted))));
     steps.push(Step::chroot(Phase::Configure, "Build initramfs", &["mkinitcpio", "-P"]));
@@ -164,7 +180,11 @@ pub fn plan(req: &InstallRequest) -> anyhow::Result<Vec<Step>> {
         RootPolicy::Separate(p) => steps.push(Step::chroot_secret(Phase::Users, "Set root password", &["chpasswd"], Secret(format!("root:{}", p.expose())))),
         RootPolicy::Locked => steps.push(Step::chroot(Phase::Users, "Lock root account", &["passwd", "-l", "root"])),
     }
-    steps.push(Step::chroot(Phase::Users, "Enable services", &["systemctl", "enable", "NetworkManager", "cosmic-greeter", "systemd-timesyncd", "fstrim.timer"]));
+    steps.push(Step::chroot(Phase::Users, "Enable services", &["systemctl", "enable", "NetworkManager", "cosmic-greeter", "systemd-timesyncd", "fstrim.timer", "bluetooth", "power-profiles-daemon"]));
+    // Flathub for the App Center (system-wide; arch-chroot binds resolv.conf so
+    // the .flatpakrepo fetch works). Best-effort: a failure here must not waste
+    // the whole install — the App Center can also self-provision later.
+    steps.push(Step::sh(Phase::Users, "Add Flathub remote", "arch-chroot /mnt flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true"));
 
     // --- Finish ---
     steps.push(Step::run(Phase::Finish, "Unmount everything", &["umount", "-R", "/mnt"]));

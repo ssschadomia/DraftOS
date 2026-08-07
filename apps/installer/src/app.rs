@@ -100,6 +100,9 @@ pub struct Installer {
     /// Set when the Summary → Install transition can't build a valid request,
     /// or when the engine reports the install failed.
     summary_error: Option<String>,
+    /// Live medium booted in BIOS/legacy mode — installing is impossible
+    /// (systemd-boot needs UEFI), so the Summary step blocks with an explanation.
+    bios_boot: bool,
     /// The serialized InstallRequest handed to the engine on the Install step.
     install_json: String,
     /// The current step title, streamed live from the engine during a real install.
@@ -198,6 +201,8 @@ impl cosmic::Application for Installer {
             plan_steps: Vec::new(),
             install_step: 0,
             summary_error: None,
+            bios_boot: std::path::Path::new("/run/archiso").exists()
+                && !std::path::Path::new("/sys/firmware/efi").exists(),
             install_json: String::new(),
             install_current: String::new(),
         };
@@ -430,6 +435,7 @@ impl Installer {
                         && self.config.luks_password == self.luks_confirm)
             }
             Step::Account => self.account_ok(),
+            Step::Summary => !self.bios_boot,
             _ => true,
         }
     }
@@ -452,13 +458,19 @@ impl Installer {
     /// The account step is satisfiable when a username and a matching, non-empty
     /// password are present — and, if root has its own password, that it matches too.
     fn account_ok(&self) -> bool {
-        let user_ok = !self.config.username.trim().is_empty()
+        let user_ok = draftos_install::config::valid_username(&self.config.username)
+            && !self.config.full_name.contains([':', '\n'])
             && !self.config.password.is_empty()
+            && !self.config.password.contains([':', '\n'])
             && self.config.password == self.password_confirm;
+        // Hostname may be left empty (a default is applied), but a non-empty one
+        // must be valid.
+        let host = self.config.hostname.trim();
+        let host_ok = host.is_empty() || draftos_install::config::valid_hostname(host);
         let root_ok = !self.config.root_separate
             || (!self.config.root_password.is_empty()
                 && self.config.root_password == self.root_confirm);
-        user_ok && root_ok
+        user_ok && host_ok && root_ok
     }
 
     /// Titled form layout: heading + subtitle above the step's content.
@@ -647,6 +659,20 @@ impl Installer {
             .width(Length::Fill)
             .class(cosmic::theme::Container::Card)
         };
+        // Not selectable: the engine doesn't implement these yet, and offering a
+        // radio that dead-ends at Summary wastes the whole wizard. Shown as
+        // roadmap, not as an option.
+        let coming_soon = |title: &'static str, detail: &'static str| {
+            widget::container(
+                widget::column::with_capacity(2)
+                    .spacing(2)
+                    .push(widget::text::heading(format!("{title} — coming soon")))
+                    .push(widget::text::caption(detail)),
+            )
+            .padding(16)
+            .width(Length::Fill)
+            .class(cosmic::theme::Container::Card)
+        };
 
         widget::column::with_capacity(4)
             .spacing(12)
@@ -656,19 +682,17 @@ impl Installer {
                 InstallType::Clean,
             ))
             .push(option(
-                "Install alongside",
-                "Keep your existing operating system and install DraftOS beside it.",
-                InstallType::Alongside,
-            ))
-            .push(option(
-                "Reinstall",
-                "Replace an existing DraftOS installation, keeping the disk layout.",
-                InstallType::Reinstall,
-            ))
-            .push(option(
                 "Manual partitioning",
                 "Assign existing partitions yourself (advanced).",
                 InstallType::Manual,
+            ))
+            .push(coming_soon(
+                "Install alongside",
+                "Keep your existing operating system and install DraftOS beside it.",
+            ))
+            .push(coming_soon(
+                "Reinstall",
+                "Replace an existing DraftOS installation, keeping the disk layout.",
             ))
             .into()
     }
@@ -928,6 +952,24 @@ impl Installer {
             .push(secret("Password", self.config.password.clone(), Message::SetPassword))
             .push(secret("Confirm password", self.password_confirm.clone(), Message::SetPasswordConfirm));
 
+        if !self.config.username.is_empty()
+            && !draftos_install::config::valid_username(&self.config.username)
+        {
+            col = col.push(widget::text::caption(
+                "Username: lowercase letters, digits, '-' and '_' only; must start \
+                 with a letter ('root' is reserved).",
+            ));
+        }
+        if !self.config.hostname.trim().is_empty()
+            && !draftos_install::config::valid_hostname(self.config.hostname.trim())
+        {
+            col = col.push(widget::text::caption(
+                "Computer name: letters, digits and '-' only, no spaces.",
+            ));
+        }
+        if self.config.full_name.contains(':') {
+            col = col.push(widget::text::caption("The full name can't contain ':'."));
+        }
         if !self.password_confirm.is_empty() && self.config.password != self.password_confirm {
             col = col.push(widget::text::caption("Passwords do not match."));
         }
@@ -1028,7 +1070,19 @@ impl Installer {
             .width(Length::Fill)
             .class(cosmic::theme::Container::Card);
 
-        let mut col = widget::column::with_capacity(2).spacing(8).push(card);
+        let mut col = widget::column::with_capacity(3).spacing(8).push(card);
+        if self.bios_boot {
+            col = col.push(
+                widget::container(widget::text::body(
+                    "This computer booted in BIOS/legacy mode, but DraftOS requires \
+                     UEFI. Reboot, enable UEFI boot for the USB medium in the \
+                     firmware settings, and start the installer again.",
+                ))
+                .padding(16)
+                .width(Length::Fill)
+                .class(cosmic::theme::Container::Card),
+            );
+        }
         if let Some(err) = &self.summary_error {
             col = col.push(widget::text::caption(format!("Cannot start install: {err}")));
         }

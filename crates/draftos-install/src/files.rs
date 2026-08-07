@@ -59,6 +59,30 @@ pub fn plymouthd_conf() -> String {
     "[Daemon]\nTheme=bgrt\n".to_string()
 }
 
+/// `/etc/os-release` — the installed system identifies as DraftOS, not Arch.
+/// Written to /etc (which shadows /usr/lib/os-release), so pacman upgrades of
+/// the `filesystem` package don't clobber it.
+pub fn os_release() -> String {
+    "NAME=\"DraftOS\"\n\
+     PRETTY_NAME=\"DraftOS\"\n\
+     ID=draftos\n\
+     ID_LIKE=arch\n\
+     BUILD_ID=rolling\n\
+     ANSI_COLOR=\"38;2;23;147;209\"\n\
+     HOME_URL=\"https://github.com/ssschadomia/DraftOS\"\n\
+     DOCUMENTATION_URL=\"https://github.com/ssschadomia/DraftOS\"\n\
+     BUG_REPORT_URL=\"https://github.com/ssschadomia/DraftOS/issues\"\n\
+     LOGO=draftos\n"
+        .to_string()
+}
+
+/// `zram-generator` config: compressed swap on zram, sized to half the RAM
+/// capped at 4 GiB. The package alone ships no active default, so without this
+/// the installed system has no swap at all.
+pub fn zram_conf() -> String {
+    "[zram0]\nzram-size = min(ram / 2, 4096)\ncompression-algorithm = zstd\n".to_string()
+}
+
 /// `systemd-boot` `loader/loader.conf`.
 pub fn loader_conf() -> String {
     "default draftos.conf\ntimeout 3\nconsole-mode max\neditor no\n".to_string()

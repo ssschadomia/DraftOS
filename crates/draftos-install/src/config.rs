@@ -102,14 +102,30 @@ impl InstallRequest {
 
     /// Basic validation before planning.
     pub fn validate(&self) -> Result<(), String> {
-        if self.account.username.trim().is_empty() {
-            return Err("username is empty".into());
+        // These rules mirror useradd/hostname(7); catching bad input here means
+        // the install fails in seconds, not after a ten-minute pacstrap.
+        if !valid_username(&self.account.username) {
+            return Err(
+                "username must start with a lowercase letter and contain only \
+                 lowercase letters, digits, '-' and '_' (max 32 chars); 'root' is reserved"
+                    .into(),
+            );
         }
         if self.account.password.is_empty() {
             return Err("user password is empty".into());
         }
-        if self.hostname.trim().is_empty() {
-            return Err("hostname is empty".into());
+        if self.account.password.expose().contains(['\n', ':']) {
+            return Err("the password must not contain ':' or line breaks".into());
+        }
+        if self.account.full_name.contains([':', '\n']) {
+            return Err("the full name must not contain ':' or line breaks".into());
+        }
+        if !valid_hostname(&self.hostname) {
+            return Err(
+                "hostname must be 1-63 characters: letters, digits and '-', \
+                 not starting or ending with '-'"
+                    .into(),
+            );
         }
         if self.locale.trim().is_empty() {
             return Err("locale is empty".into());
@@ -123,9 +139,32 @@ impl InstallRequest {
             if root.trim().is_empty() || esp.trim().is_empty() {
                 return Err("manual target needs both root and ESP partitions".into());
             }
+            if root == esp {
+                return Err("root and ESP must be different partitions".into());
+            }
         }
         Ok(())
     }
+}
+
+/// useradd's default NAME_REGEX: `[a-z_][a-z0-9_-]*`, at most 32 chars; plus we
+/// reserve `root` (the wizard manages root separately).
+pub fn valid_username(u: &str) -> bool {
+    let mut chars = u.chars();
+    let first_ok = matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c == '_');
+    first_ok
+        && u.len() <= 32
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        && u != "root"
+}
+
+/// RFC-1123 single label: 1-63 chars of `[A-Za-z0-9-]`, no leading/trailing `-`.
+pub fn valid_hostname(h: &str) -> bool {
+    !h.is_empty()
+        && h.len() <= 63
+        && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !h.starts_with('-')
+        && !h.ends_with('-')
 }
 
 /// Shared sample request for tests across the crate.
@@ -157,6 +196,32 @@ pub(crate) mod tests_support {
 mod tests {
     use super::tests_support::sample;
     use super::*;
+
+    #[test]
+    fn username_and_hostname_rules() {
+        for ok in ["alice", "_svc", "a", "user-01", "x_y"] {
+            assert!(valid_username(ok), "{ok} should be valid");
+        }
+        for bad in ["", "Root", "root", "1abc", "-a", "a b", "юзер", "a:b"] {
+            assert!(!valid_username(bad), "{bad} should be invalid");
+        }
+        for ok in ["draftos", "my-pc", "PC01"] {
+            assert!(valid_hostname(ok), "{ok} should be valid");
+        }
+        for bad in ["", "-x", "x-", "my pc", "a.b", &"h".repeat(64)] {
+            assert!(!valid_hostname(bad), "{bad} should be invalid");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_wasteful_late_failures() {
+        let mut r = sample();
+        r.account.full_name = "Team: DraftOS".into(); // ':' breaks chpasswd/GECOS
+        assert!(r.validate().is_err());
+        let mut r = sample();
+        r.hostname = "my pc".into();
+        assert!(r.validate().is_err());
+    }
 
     #[test]
     fn secret_is_redacted_in_debug() {

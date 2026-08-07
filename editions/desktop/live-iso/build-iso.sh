@@ -63,6 +63,9 @@ podman run --rm --privileged \
         cp -a /usr/share/archiso/configs/releng /tmp/profile
         cp -a /iso/'"$PROFILE"'/. /tmp/profile/
         chmod +x /tmp/profile/profiledef.sh
+        # Drop releng leftovers our overlay cannot remove by copying over it:
+        # the speech boot entry (we ship no speakup stack, it would be silent).
+        rm -f /tmp/profile/efiboot/loader/entries/02-archiso-speech-linux.conf
         mkarchiso -v -w /iso/work -o /iso/out /tmp/profile
     '
 
